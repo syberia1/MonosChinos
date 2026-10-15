@@ -437,7 +437,7 @@ function pickShow(results, year, season, marked, query) {
       return { r, score };
     })
     // Umbral alto: evita cruzar partes de JoJo (Stone Ocean vs Steel Ball Run vs Phantom Blood)
-    .filter((x) => x.score >= 72)
+    .filter((x) => x.score >= 60)
     .sort((a, b) => b.score - a.score);
   return scored.length ? scored[0].r : null;
 }
@@ -462,27 +462,59 @@ async function movieInfo(title) {
 }
 
 async function seriesInfo(title, year) {
-  if (typeof kino.tmdb !== "function") return null;
-  const sp = splitTitle(title);
-  if (sp.base.length < 2) return null;
-  // Probar el título completo y, si hace falta, la parte antes de ":" (Steel Ball Run)
-  const queries = [sp.base];
-  const beforeColon = sp.base.split(":")[0].trim();
-  if (beforeColon.length >= 4 && beforeColon !== sp.base) queries.push(beforeColon);
-  let hit = null;
-  for (const q of queries) {
-    const r = await kino.tmdb("/search/tv", { query: q, language: "es-MX", include_adult: false });
-    hit = pickShow((r && r.results) || [], year || 0, sp.season, sp.marked, q);
-    if (hit) break;
+  // 1) TMDB
+  if (typeof kino.tmdb === "function") {
+    const sp = splitTitle(title);
+    if (sp.base.length >= 2) {
+      const queries = [sp.base];
+      const beforeColon = sp.base.split(":")[0].trim();
+      if (beforeColon.length >= 4 && beforeColon !== sp.base) queries.push(beforeColon);
+      let hit = null;
+      for (const q of queries) {
+        const r = await kino.tmdb("/search/tv", { query: q.replace(/[.,;:]+$/g, "").trim(), language: "es-MX", include_adult: false });
+        hit = pickShow((r && r.results) || [], year || 0, sp.season, sp.marked, q);
+        if (hit) break;
+      }
+      if (hit) {
+        return {
+          overview: String(hit.overview || "").slice(0, 700),
+          backdrop: hit.backdrop_path ? TMDB_BACK + hit.backdrop_path : "",
+          poster: hit.poster_path ? TMDB_IMG + hit.poster_path : "",
+          year: String(hit.first_air_date || "").slice(0, 4),
+          tmdbId: hit.id,
+          source: "tmdb",
+        };
+      }
+    }
   }
-  if (!hit) return null;
-  return {
-    overview: String(hit.overview || "").slice(0, 700),
-    backdrop: hit.backdrop_path ? TMDB_BACK + hit.backdrop_path : "",
-    poster: hit.poster_path ? TMDB_IMG + hit.poster_path : "",
-    year: String(hit.first_air_date || "").slice(0, 4),
-    tmdbId: hit.id,
-  };
+  // 2) kino.meta (AniList incluido)
+  try {
+    const meta = await metaByTitle(title, year);
+    if (meta && (meta.overview || meta.poster || meta.backdrop)) {
+      return {
+        overview: meta.overview || "",
+        poster: meta.poster || "",
+        backdrop: meta.backdrop || meta.poster || "",
+        year: meta.year || "",
+        malId: meta.malId,
+        source: "meta",
+      };
+    }
+  } catch (e) {
+    /* siguiente */
+  }
+  // 3) MyAnimeList (Jikan)
+  try {
+    const a = await malSearchAnime(title, year);
+    if (a) {
+      const full = a.synopsis ? a : (await malAnimeFull(a.mal_id)) || a;
+      const info = malToInfo(full);
+      if (info) return info;
+    }
+  } catch (e) {
+    kino.log("mal series: " + (e && e.message));
+  }
+  return null;
 }
 
 async function infoFor(item) {
@@ -788,43 +820,58 @@ async function tmdbSeason(id, season, language) {
 async function tmdbEpisodes(title, year, maxNum) {
   const sp = splitTitle(title);
   if (sp.base.length < 2) return {};
-  // Palabras distintivas del título (no genéricas) deben aparecer en el resultado TMDB
-  const stop = { jojo: 1, jojos: 1, kimyou: 1, bouken: 1, no: 1, na: 1, the: 1, animation: 1, anime: 1, part: 1 };
+  // Solo exigir palabras "fuertes" cuando el título parece una franquicia con partes (JoJo, etc.)
+  const franchise = /\b(jojo|naruto|one\s*piece|bleach|fate|pokemon|digimon|precure|gundam|ultraman)\b/i.test(title);
+  const stop = { jojo: 1, jojos: 1, kimyou: 1, bouken: 1, no: 1, na: 1, the: 1, animation: 1, anime: 1, part: 1, season: 1 };
   const distinctive = wordsOf(sp.base).filter((w) => w.length >= 4 && !stop[w]);
   const queries = [];
   const beforeColon = sp.base.split(":")[0].trim();
-  if (beforeColon.length >= 4) queries.push(beforeColon);
+  if (beforeColon.length >= 4 && beforeColon !== sp.base) queries.push(beforeColon);
   queries.push(sp.base);
+  // Quitar puntuación final del query
+  for (let i = 0; i < queries.length; i++) queries[i] = queries[i].replace(/[.,;:]+$/g, "").trim();
+
   let show = null;
   let bestScore = 0;
   for (const q of queries) {
+    if (q.length < 2) continue;
     const found = await kino.tmdb("/search/tv", { query: q, language: "es-MX", include_adult: false });
     const hit = pickShow(found && found.results, year, sp.season, sp.marked, q);
     if (!hit) continue;
     const sc = titleScore(hit, q);
-    // Si el query tiene palabras distintivas (steel, ocean, diamond…), deben estar en el nombre TMDB
-    if (distinctive.length) {
+    if (franchise && distinctive.length) {
       const names = norm((hit.name || "") + " " + (hit.original_name || ""));
       const ok = distinctive.filter((w) => names.indexOf(w) >= 0).length;
-      if (ok < Math.min(distinctive.length, 2) && ok / distinctive.length < 0.5) continue;
+      // En franquicias, exigir al menos una palabra distintiva (steel, ocean, diamond…)
+      if (ok < 1) continue;
     }
     if (sc > bestScore) {
       bestScore = sc;
       show = hit;
     }
   }
-  // Sin match fiable: no inventar capítulos de otra serie (p. ej. Phantom Blood en Steel Ball Run)
-  if (!show || bestScore < 72) return {};
-  // Si el año del show dista mucho del del sitio, descartar
+  if (!show || bestScore < 60) return {};
   if (year > 1900) {
     const y = parseInt(String(show.first_air_date || "").slice(0, 4), 10) || 0;
-    if (y && Math.abs(y - year) > 3) return {};
+    // Solo descartar si el desfase es enorme (otra serie homónima antigua)
+    if (y && Math.abs(y - year) > 8) return {};
   }
   let eps = await tmdbSeason(show.id, sp.season, "es-MX");
+  // Si Season 2 no trae episodios, probar season_number detectado
+  if ((!eps || !eps.length) && sp.season > 1) {
+    try {
+      const detail = await kino.tmdb("/tv/" + show.id, { language: "es-MX" });
+      const seasons = ((detail && detail.seasons) || []).filter((x) => x.season_number > 0);
+      const want = seasons.find((s) => s.season_number === sp.season) || seasons[seasons.length - 1];
+      if (want) eps = await tmdbSeason(show.id, want.season_number, "es-MX");
+    } catch (e) {
+      /* ignore */
+    }
+  }
   const byNum = {};
-  for (const e of eps) byNum[e.episode_number] = e;
-  const empty = eps.filter((e) => !e.overview).length;
-  if (eps.length && empty > eps.length / 2) {
+  for (const e of eps || []) byNum[e.episode_number] = e;
+  const empty = (eps || []).filter((e) => !e.overview).length;
+  if (eps && eps.length && empty > eps.length / 2) {
     try {
       const en = await tmdbSeason(show.id, sp.season, "en-US");
       for (const e of en) if (byNum[e.episode_number] && !byNum[e.episode_number].overview) byNum[e.episode_number].overview = e.overview;
@@ -846,9 +893,179 @@ async function tmdbEpisodes(title, year, maxNum) {
   return out;
 }
 
+// ---------- MyAnimeList (Jikan) + kino.meta (AniList) como respaldo de TMDB ----------
+
+const JIKAN = "https://api.jikan.moe/v4";
+
+function malTitleScore(anime, query) {
+  if (!anime) return 0;
+  const names = [anime.title, anime.title_english, anime.title_japanese]
+    .concat((anime.titles || []).map((t) => t && t.title))
+    .filter(Boolean);
+  let best = 0;
+  const q = norm(query);
+  for (const n of names) {
+    const nn = norm(n);
+    if (!nn) continue;
+    if (nn === q) return 100;
+    if (nn.indexOf(q) >= 0 || q.indexOf(nn) >= 0) best = Math.max(best, 85);
+    const qw = wordsOf(q);
+    const nw = wordsOf(nn);
+    if (qw.length) best = Math.max(best, Math.round((qw.filter((w) => nw.indexOf(w) >= 0).length / qw.length) * 75));
+  }
+  return best;
+}
+
+async function jikanGet(path, params) {
+  let url = JIKAN + path;
+  if (params) {
+    const parts = [];
+    for (const k of Object.keys(params)) {
+      if (params[k] == null || params[k] === "") continue;
+      parts.push(encodeURIComponent(k) + "=" + encodeURIComponent(String(params[k])));
+    }
+    if (parts.length) url += "?" + parts.join("&");
+  }
+  const r = await kino.fetch(url, {
+    headers: { "User-Agent": UA, Accept: "application/json" },
+    timeoutMs: 10000,
+  });
+  if (!r.ok) return null;
+  try {
+    return JSON.parse(r.text());
+  } catch (e) {
+    return null;
+  }
+}
+
+async function malSearchAnime(title, year) {
+  const sp = splitTitle(title);
+  const q = (sp.base || title).replace(/[.,;:]+$/g, "").trim();
+  if (q.length < 2) return null;
+  const data = await jikanGet("/anime", { q: q, limit: 8, order_by: "popularity", sfw: "true" });
+  const list = (data && data.data) || [];
+  let best = null;
+  let bestScore = 0;
+  for (const a of list) {
+    let sc = malTitleScore(a, q);
+    if (year > 1900 && a.year) {
+      const diff = Math.abs(a.year - year);
+      if (diff === 0) sc += 12;
+      else if (diff <= 1) sc += 6;
+      else if (diff > 6) sc -= 25;
+    }
+    // Evitar cruzar franquicias JoJo: si el query tiene palabras fuertes, deben estar
+    if (/\b(steel|ocean|diamond|stardust|phantom|golden|stone)\b/i.test(q)) {
+      const names = norm([a.title, a.title_english].filter(Boolean).join(" "));
+      const need = wordsOf(q).filter((w) => w.length >= 4 && !/^(jojo|kimyou|bouken|no|na)$/.test(w));
+      if (need.length && !need.some((w) => names.indexOf(w) >= 0)) continue;
+    }
+    if (sc > bestScore) {
+      bestScore = sc;
+      best = a;
+    }
+  }
+  if (!best || bestScore < 55) return null;
+  return best;
+}
+
+async function malAnimeFull(id) {
+  const data = await jikanGet("/anime/" + id + "/full");
+  return data && data.data ? data.data : null;
+}
+
+async function malEpisodes(id, maxNum) {
+  const out = {};
+  let page = 1;
+  while (page <= 8) {
+    const data = await jikanGet("/anime/" + id + "/episodes", { page: page });
+    const list = (data && data.data) || [];
+    if (!list.length) break;
+    for (const e of list) {
+      const n = e.mal_id || e.episode;
+      if (!n) continue;
+      if (maxNum && n > maxNum + 5) continue;
+      out[n] = {
+        name: String(e.title || e.title_japanese || "").slice(0, 200),
+        overview: String(e.synopsis || e.title_romanji || "").slice(0, 2000),
+        still: "",
+        air: e.aired && /^\d{4}-\d{2}-\d{2}/.test(e.aired) ? e.aired.slice(0, 10) : "",
+        rt: 0,
+      };
+    }
+    if (!(data && data.pagination && data.pagination.has_next_page)) break;
+    page++;
+    if (Object.keys(out).length >= (maxNum || 2000)) break;
+  }
+  return out;
+}
+
+function malToInfo(a) {
+  if (!a) return null;
+  const poster = (a.images && a.images.jpg && (a.images.jpg.large_image_url || a.images.jpg.image_url)) || "";
+  const synopsis = String(a.synopsis || "")
+    .replace(/\[Written by MAL Rewrite\]/gi, "")
+    .replace(/\s+/g, " ")
+    .trim();
+  return {
+    overview: synopsis.slice(0, 2000),
+    poster: poster,
+    backdrop: poster,
+    year: a.year ? String(a.year) : String((a.aired && a.aired.from) || "").slice(0, 4),
+    malId: a.mal_id,
+    source: "mal",
+  };
+}
+
+// kino.meta: TMDB + AniList de Kino (sin clave), útil cuando byTitle está disponible
+async function metaByTitle(title, year) {
+  if (typeof kino.meta !== "function") return null;
+  const sp = splitTitle(title);
+  const q = (sp.base || title).replace(/[.,;:]+$/g, "").trim();
+  if (q.length < 2) return null;
+  try {
+    let m = null;
+    if (kino.meta.byTitle === true) {
+      const req = { type: "series", title: q };
+      if (year > 1900) req.year = year;
+      m = await kino.meta(req);
+    }
+    if (!m) return null;
+    const extras = {};
+    if (m.episodes && m.episodes.length) {
+      for (const e of m.episodes) {
+        const n = e.number;
+        if (!n) continue;
+        // Si el título marca Season 2, respetar season; si no, aplanar
+        const key = sp.marked && e.season && e.season !== sp.season ? null : n;
+        if (key == null) continue;
+        if (sp.marked && e.season && e.season !== sp.season) continue;
+        extras[n] = {
+          name: String(e.title || "").slice(0, 200),
+          overview: String(e.overview || "").slice(0, 2000),
+          still: e.still || "",
+          air: e.airDate || "",
+          rt: 0,
+        };
+      }
+    }
+    return {
+      overview: String(m.overview || "").slice(0, 2000),
+      poster: m.poster || "",
+      backdrop: m.backdrop || "",
+      year: m.year ? String(m.year).slice(0, 4) : "",
+      malId: m.ids && m.ids.mal,
+      episodes: extras,
+      source: "meta",
+    };
+  } catch (e) {
+    kino.log("kino.meta: " + (e && e.message));
+    return null;
+  }
+}
+
 async function episodeExtras(slug, title, year, maxNum) {
-  if (typeof kino.tmdb !== "function") return {};
-  const key = "tmdb5:" + slug;
+  const key = "meta7:" + slug;
   try {
     const hit = kino.storage.get(key);
     if (hit) return JSON.parse(hit);
@@ -860,7 +1077,25 @@ async function episodeExtras(slug, title, year, maxNum) {
     extras = await tmdbEpisodes(title, year, maxNum);
   } catch (e) {
     kino.log("tmdb: " + (e && e.message));
-    return {};
+  }
+  if (!Object.keys(extras).length) {
+    try {
+      const meta = await metaByTitle(title, year);
+      if (meta && meta.episodes && Object.keys(meta.episodes).length) extras = meta.episodes;
+    } catch (e) {
+      kino.log("meta eps: " + (e && e.message));
+    }
+  }
+  if (!Object.keys(extras).length) {
+    try {
+      const hit = await malSearchAnime(title, year);
+      if (hit && hit.mal_id) {
+        const eps = await malEpisodes(hit.mal_id, maxNum);
+        if (Object.keys(eps).length) extras = eps;
+      }
+    } catch (e) {
+      kino.log("mal: " + (e && e.message));
+    }
   }
   try {
     const raw = JSON.stringify(extras);
@@ -871,125 +1106,6 @@ async function episodeExtras(slug, title, year, maxNum) {
   return extras;
 }
 
-function parseAnimePage(html, slug) {
-  const nums = {};
-  const re = new RegExp("/ver/" + slug.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + "-episodio-(\\d+)", "gi");
-  let x;
-  while ((x = re.exec(html))) nums[parseInt(x[1], 10)] = true;
-
-  // Metadatos del listado AJAX: <section id="dt" data-e="16" data-i="7286" data-u="slug">
-  // data-i = id interno del anime; data-e = total de capítulos.
-  let epId = "";
-  let epTotal = 0;
-  const mi = /id=["']dt["'][^>]*data-i=["'](\d+)["']|data-i=["'](\d+)["'][^>]*id=["']dt["']|data-i=["'](\d+)["']/.exec(html);
-  const me = /id=["']dt["'][^>]*data-e=["'](\d+)["']|data-e=["'](\d+)["'][^>]*id=["']dt["']|data-e=["'](\d+)["']/.exec(html);
-  if (mi) epId = mi[1] || mi[2] || mi[3] || "";
-  if (me) epTotal = parseInt(me[1] || me[2] || me[3] || "0", 10) || 0;
-
-  const numbers = Object.keys(nums)
-    .map(Number)
-    .sort((a, b) => a - b)
-    .slice(0, 2000);
-
-  const info = {};
-  const h1 = kino.html.select(html, "h1")[0];
-  if (h1 && h1.text.trim()) info.title = h1.text.replace(/\s+/g, " ").trim().slice(0, 200);
-  const ogd = kino.html.select(html, "meta[property=og:description]")[0] || kino.html.select(html, "meta[name=description]")[0];
-  if (ogd && ogd.attrs.content) {
-    let text = ogd.attrs.content
-      .replace(/ver online[\s\S]*?(?=MonosChinos2?\s+[A-ZÁÉÍÓÚÑa-záéíóúñ])/i, "")
-      .replace(/^[\s\S]*?MonosChinos2?\s+/i, "")
-      .replace(/ver online[^,]*,?/gi, "")
-      .replace(/Mira[^,]*,?/gi, "")
-      .replace(/online gratis,?/gi, "")
-      .replace(/en Sub Español[^,]*,?/gi, "")
-      .replace(/y descarga en[^,]*,?/gi, "")
-      .replace(/Monos\s*Chinos2?,?/gi, "")
-      .replace(/\s+/g, " ")
-      .trim();
-    // Si quedó basura de SEO, buscar la primera frase "real"
-    if (text.length < 40 || /^(ver|mira|online)/i.test(text)) {
-      const m = /([A-ZÁÉÍÓÚÑ][^.]{40,500}\.)/.exec(ogd.attrs.content);
-      if (m) text = m[1].trim();
-    }
-    if (text.length > 40) info.overview = text.slice(0, 2000);
-  }
-  // También póster TMDB si el del CDN falta o es placeholder
-  if (!info.poster) info.poster = posterFromSlug(slug, true);
-  const genres = kino.html.select(html, "a[href*='genero=']").map((g) => g.text.trim()).filter(Boolean);
-  if (genres.length) info.genres = genres.slice(0, 5).map((g) => g.slice(0, 30));
-  const yearEl = kino.html.select(html, "span.year")[0] || kino.html.select(html, ".anio")[0];
-  if (yearEl && /\d{4}/.test(yearEl.text)) info.year = /\d{4}/.exec(yearEl.text)[0];
-  if (!info.year) {
-    const ym = /\b(19|20)\d{2}\b/.exec(html.slice(0, 8000));
-    if (ym) info.year = ym[0];
-  }
-  const og = kino.html.select(html, "meta[property=og:image]")[0];
-  if (og && og.attrs.content) info.poster = abs(og.attrs.content);
-  if (!info.poster) {
-    const img = kino.html.select(html, "img.lazy")[0] || kino.html.select(html, "img")[0];
-    info.poster = imgUrl(img);
-  }
-  if (!info.poster) info.poster = posterFromSlug(slug, true);
-  return { numbers, info, epId, epTotal };
-}
-
-// Lista de capítulos vía POST /ajax_pagination (acc=episodes). Páginas de 50.
-async function fetchEpisodeNumbers(slug, epId, epTotal) {
-  const nums = {};
-  if (!epId) return [];
-  const pages = Math.max(1, Math.ceil((epTotal || 50) / 50));
-  for (let p = 1; p <= Math.min(pages, 40); p++) {
-    try {
-      const r = await kino.fetch(BASE + "/ajax_pagination", {
-        method: "POST",
-        headers: {
-          "User-Agent": UA,
-          "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
-          Accept: "*/*",
-          "X-Requested-With": "XMLHttpRequest",
-          Referer: BASE + "/anime/" + slug,
-          Origin: BASE,
-        },
-        body: "acc=episodes&i=" + encodeURIComponent(epId) + "&u=" + encodeURIComponent(slug) + "&p=" + p,
-        timeoutMs: 12000,
-      });
-      if (!r.ok) break;
-      const html = r.text() || "";
-      const re = new RegExp("/ver/" + slug.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + "-episodio-(\\d+)", "gi");
-      let x;
-      let found = 0;
-      while ((x = re.exec(html))) {
-        nums[parseInt(x[1], 10)] = true;
-        found++;
-      }
-      if (!found) break;
-    } catch (e) {
-      kino.log("episodes ajax p=" + p + ": " + (e && e.message));
-      break;
-    }
-  }
-  let list = Object.keys(nums)
-    .map(Number)
-    .sort((a, b) => a - b);
-  // Si el AJAX falló pero conocemos el total, generar 1..N
-  if (!list.length && epTotal > 0) {
-    list = [];
-    for (let i = 1; i <= Math.min(epTotal, 2000); i++) list.push(i);
-  }
-  return list.slice(0, 2000);
-}
-
-function savedGet(key) {
-  const raw = cacheGet(key);
-  if (!raw) return null;
-  try {
-    return JSON.parse(raw);
-  } catch (e) {
-    return null;
-  }
-}
-
 export async function episodes(ref) {
   const T = Date.now();
   const left = () => 18500 - (Date.now() - T);
@@ -997,7 +1113,7 @@ export async function episodes(ref) {
   if (!m) throw fail("not_found", "ref " + ref, "badRef");
   const slug = m[1];
 
-  const key = "ep5:" + slug; // ep3: lista completa vía AJAX (antes ep1 solo veía 1 capítulo)
+  const key = "ep6:" + slug; // ep3: lista completa vía AJAX (antes ep1 solo veía 1 capítulo)
   const saved = savedGet(key);
   let data = saved && saved.data && Date.now() - saved.t < 10 * 60000 ? saved.data : null;
   if (!data) {
@@ -1032,9 +1148,10 @@ export async function episodes(ref) {
     if (got !== LATE) extras = got || {};
   }
   const shift = numbers.length && numbers[0] === 0 ? 1 : 0;
+  const titleSeason = splitTitle(info.title || slugTitle);
   const list = numbers.map((n) => {
     const ep = {
-      season: 1,
+      season: titleSeason.marked ? titleSeason.season : 1,
       number: n + shift,
       ref: "e:" + slug + ":" + n,
       title: t("episode") + n,
@@ -1056,9 +1173,26 @@ export async function episodes(ref) {
         : null;
     if (extra && extra !== LATE) {
       if (extra.backdrop) info.backdrop = extra.backdrop;
-      // Solo rellenar sinopsis si la del sitio es muy corta (evita mezclar series de JoJo)
-      if (extra.overview && (info.overview || "").length < 80) info.overview = extra.overview;
+      if (extra.overview && ((info.overview || "").length < 100 || /online gratis|monoschinos|ver online/i.test(info.overview || ""))) info.overview = extra.overview;
       if (extra.poster && !info.poster) info.poster = extra.poster;
+    }
+    // Respaldo MAL/meta si aún falta sinopsis o fondo
+    if ((!info.overview || (info.overview || "").length < 80 || /online gratis|monoschinos/i.test(info.overview || "")) || !info.backdrop) {
+      try {
+        let fill = null;
+        if (typeof kino.meta === "function") fill = await metaByTitle(info.title || slugTitle, parseInt(info.year, 10) || 0);
+        if (!fill || !fill.overview) {
+          const a = await malSearchAnime(info.title || slugTitle, parseInt(info.year, 10) || 0);
+          if (a) fill = malToInfo((await malAnimeFull(a.mal_id)) || a);
+        }
+        if (fill) {
+          if (fill.overview && ((info.overview || "").length < 100 || /online gratis|monoschinos/i.test(info.overview || ""))) info.overview = fill.overview;
+          if (fill.backdrop && !info.backdrop) info.backdrop = fill.backdrop;
+          if (fill.poster && !info.poster) info.poster = fill.poster;
+        }
+      } catch (e2) {
+        kino.log("mal fill: " + (e2 && e2.message));
+      }
     }
   } catch (e) {
     kino.log("ficha sin TMDB: " + (e && e.message));

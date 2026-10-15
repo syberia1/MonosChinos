@@ -1,10 +1,10 @@
 {
   "id": "monoschinos",
   "name": "MonosChinos",
-  "version": "1.3.2",
+  "version": "1.4.0",
   "apiVersion": 6,
   "entry": "plugin.js",
-  "description": "Anime subtitulado en español de MonosChinos2 (Voe, Filemoon, StreamWish, Doodstream, MixDrop y más).",
+  "description": "Anime subtitulado de MonosChinos2. Metadatos TMDB/AniList/MAL; servidores MixDrop, Mp4Upload, Voe, Netu y más.",
   "author": "tu-usuario-de-github",
   "hosts": [
     "vww.monoschinos2.net",
