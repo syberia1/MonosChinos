@@ -213,7 +213,7 @@ function cleanTitle(raw, isEpisode) {
   let title = String(raw || "")
     .replace(/^Ver\s+/i, "")
     .replace(/^Anime\s+/i, "")
-    .replace(/\s+Online\s+Gratis$/i, "")
+    .replace(/\s+Online\s+Gratis\.?$/i, "")
     .replace(/\s+capitulo\s+\d+$/i, "")
     .replace(/\s+episodio\s+\d+$/i, "")
     .replace(/\s+/g, " ")
@@ -222,10 +222,17 @@ function cleanTitle(raw, isEpisode) {
   return title;
 }
 
-// Extrae un bloque de tarjeta a partir de un href encontrado en el HTML.
+// Lee atributo HTML respetando comillas (JoJo's no debe cortar el valor).
+function attrOf(chunk, name) {
+  let m = new RegExp("\\b" + name + "\\s*=\\s*\"([^\"]*)\"", "i").exec(chunk);
+  if (m) return m[1];
+  m = new RegExp("\\b" + name + "\\s*=\\s*'([^']*)'", "i").exec(chunk);
+  return m ? m[1] : "";
+}
+
 function cardChunkAround(html, index, hrefLen) {
-  const from = Math.max(0, index - 80);
-  const to = Math.min(html.length, index + hrefLen + 900);
+  const from = Math.max(0, index - 120);
+  const to = Math.min(html.length, index + hrefLen + 1200);
   return html.slice(from, to);
 }
 
@@ -243,7 +250,6 @@ function cardsFrom(html, opts) {
     } else if (!poster) {
       poster = posterFromSlug(slug, !isEpisode);
     }
-    // Quitar query ?t=0.3 de portadas (a veces falla el CDN)
     if (poster) poster = String(poster).replace(/\?t=[^&]+/, "");
     const item = mkItem(slug, title, poster, movie && !isEpisode);
     if (!item) return;
@@ -251,41 +257,54 @@ function cardsFrom(html, opts) {
     items.push(item);
   };
 
-  // --- Anime: regex único sobre el HTML (evita duplicar article + anchor + fallback) ---
+  // --- Anime: un resultado por slug ---
   if (opts.onlyAnime || (!opts.onlyEpisodes && !opts.preferAnimePoster)) {
-    const reAnime = /href=["']([^"']*\/anime\/([^"'/?#]+))["']/gi;
+    const reAnime = /href=(["'])([^"']*\/anime\/([^"'/?#]+))\1/gi;
     let x;
     while ((x = reAnime.exec(html))) {
-      const slug = x[2];
+      const slug = x[3];
       if (seen[slug]) continue;
       const chunk = cardChunkAround(html, x.index, x[0].length);
-      const imgM =
-        /data-src=["']([^"']*cdn\/img\/[^"']+)["']/i.exec(chunk) ||
-        /src=["']([^"']*cdn\/img\/anime\/[^"']+)["']/i.exec(chunk);
-      let poster = imgM ? abs(imgM[1]) : "";
-      if (/\/cdn\/img\/(anime|episode|coverfb)\.png/i.test(poster)) poster = "";
-      const alt = /alt=["']([^"']+)["']/i.exec(chunk);
-      const tit = /title=["']([^"']+)["']/i.exec(chunk);
-      let title = cleanTitle((tit && tit[1]) || (alt && alt[1]) || "", false);
-      if (!title) title = slug.replace(/-/g, " ");
+      let poster = attrOf(chunk, "data-src") || "";
+      if (!poster || /\/cdn\/img\/(anime|episode|coverfb)\.png/i.test(poster)) {
+        const src = attrOf(chunk, "src");
+        if (src && /\/cdn\/img\/anime\//i.test(src)) poster = src;
+        else poster = "";
+      }
+      if (poster) poster = abs(poster);
+      let title =
+        cleanTitle(attrOf(chunk, "title"), false) ||
+        cleanTitle(attrOf(chunk, "alt"), false) ||
+        "";
+      if (!title) {
+        const h3 = /<h3[^>]*class="[^"]*title_cap[^"]*"[^>]*>([^<]+)/i.exec(chunk) || /<h3[^>]*>([^<]+)/i.exec(chunk);
+        if (h3) title = cleanTitle(h3[1], false);
+      }
+      // Si el título quedó truncado por un apóstrofe mal parseado, usar el slug
+      if (!title || /^jojo'?s?$/i.test(title.trim())) {
+        title = slug
+          .replace(/-/g, " ")
+          .replace(/\bjojos\b/gi, "JoJo's")
+          .replace(/\bjojo\b/gi, "JoJo");
+        title = title.replace(/\b\w/g, (c) => c.toUpperCase());
+      }
       const movie = !!(opts.movies || /pelicula|movie/i.test(slug) || /Pel[ií]cula/i.test(chunk));
       push(slug, title, poster, false, movie);
     }
   }
 
-  // --- Capítulos (En emisión): /ver/slug-episodio-N ---
+  // --- Capítulos (En emisión) ---
   if (opts.onlyEpisodes || opts.preferAnimePoster || (!opts.onlyAnime && !items.length)) {
-    const reVer = /href=["']([^"']*\/ver\/([^"'/?#]+)-episodio-(\d+))["']/gi;
+    const reVer = /href=(["'])([^"']*\/ver\/([^"'/?#]+)-episodio-(\d+))\1/gi;
     let x;
     while ((x = reVer.exec(html))) {
-      const slug = x[2];
+      const slug = x[3];
       if (seen[slug]) continue;
       const chunk = cardChunkAround(html, x.index, x[0].length);
-      const alt = /alt=["']([^"']+)["']/i.exec(chunk);
-      const tit = /title=["']([^"']+)["']/i.exec(chunk);
-      let title = cleanTitle((tit && tit[1]) || (alt && alt[1]) || "", true);
-      if (!title) title = slug.replace(/-/g, " ");
-      // Portada del anime, no la captura del capítulo
+      let title =
+        cleanTitle(attrOf(chunk, "title"), true) ||
+        cleanTitle(attrOf(chunk, "alt"), true) ||
+        slug.replace(/-/g, " ");
       push(slug, title, posterFromSlug(slug, true), true, false);
     }
   }
