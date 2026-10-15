@@ -399,16 +399,46 @@ function splitTitle(title) {
   return { base, season, marked };
 }
 
-function pickShow(results, year, season, marked) {
+function titleScore(r, query) {
+  // Puntuación de similitud: evita que "Steel Ball Run: JoJo…" se confunda con "JoJo no Kimyou na Bouken" (Phantom Blood).
+  const q = norm(query);
+  const names = [r.name, r.original_name, r.title, r.original_title].filter(Boolean).map(norm);
+  let best = 0;
+  for (const n of names) {
+    if (!n) continue;
+    if (n === q) return 100;
+    if (n.indexOf(q) >= 0 || q.indexOf(n) >= 0) best = Math.max(best, 80);
+    const qw = wordsOf(q);
+    const nw = wordsOf(n);
+    if (!qw.length) continue;
+    const hit = qw.filter((w) => nw.indexOf(w) >= 0).length;
+    const ratio = hit / qw.length;
+    // Exigir que las palabras distintivas del query (no genéricas) estén en el nombre
+    best = Math.max(best, Math.round(ratio * 70));
+  }
+  return best;
+}
+
+function pickShow(results, year, season, marked, query) {
   const list = (results || []).filter((r) => r && r.id && r.original_language === "ja");
   const anim = list.filter((r) => (r.genre_ids || []).indexOf(16) >= 0);
-  for (const r of anim.length ? anim : list) {
-    const y = parseInt(String(r.first_air_date || "").slice(0, 4), 10);
-    if (!year || !y) return r;
-    const diff = year - y;
-    if (marked && season > 1 ? diff >= 0 : diff >= -1 && diff <= 4) return r;
-  }
-  return null;
+  const pool = anim.length ? anim : list;
+  // Ordenar por similitud de título; umbral mínimo para no coger otra parte de JoJo
+  const scored = pool
+    .map((r) => {
+      const y = parseInt(String(r.first_air_date || "").slice(0, 4), 10) || 0;
+      let score = titleScore(r, query || "");
+      if (year && y) {
+        const diff = Math.abs(year - y);
+        if (diff === 0) score += 10;
+        else if (diff <= 2) score += 5;
+        else if (diff > 8) score -= 20;
+      }
+      return { r, score };
+    })
+    .filter((x) => x.score >= 55)
+    .sort((a, b) => b.score - a.score);
+  return scored.length ? scored[0].r : null;
 }
 
 async function movieInfo(title) {
@@ -434,18 +464,28 @@ async function seriesInfo(title, year) {
   if (typeof kino.tmdb !== "function") return null;
   const sp = splitTitle(title);
   if (sp.base.length < 2) return null;
-  const r = await kino.tmdb("/search/tv", { query: sp.base, language: "es-MX", include_adult: false });
-  const hit = pickShow((r && r.results) || [], year || 0, sp.season, sp.marked);
+  // Probar el título completo y, si hace falta, la parte antes de ":" (Steel Ball Run)
+  const queries = [sp.base];
+  const beforeColon = sp.base.split(":")[0].trim();
+  if (beforeColon.length >= 4 && beforeColon !== sp.base) queries.push(beforeColon);
+  let hit = null;
+  for (const q of queries) {
+    const r = await kino.tmdb("/search/tv", { query: q, language: "es-MX", include_adult: false });
+    hit = pickShow((r && r.results) || [], year || 0, sp.season, sp.marked, q);
+    if (hit) break;
+  }
   if (!hit) return null;
   return {
     overview: String(hit.overview || "").slice(0, 700),
     backdrop: hit.backdrop_path ? TMDB_BACK + hit.backdrop_path : "",
-    year: "",
+    poster: hit.poster_path ? TMDB_IMG + hit.poster_path : "",
+    year: String(hit.first_air_date || "").slice(0, 4),
+    tmdbId: hit.id,
   };
 }
 
 async function infoFor(item) {
-  const key = (item.kind === "movie" ? "mov2:" : "ser2:") + item.id;
+  const key = (item.kind === "movie" ? "mov3:" : "ser3:") + item.id;
   const hit = cacheGet(key);
   if (hit) return hit === "0" ? null : JSON.parse(hit);
   const info = item.kind === "movie" ? await movieInfo(item.title) : await seriesInfo(item.title, item.year);
@@ -455,8 +495,14 @@ async function infoFor(item) {
 
 function applyInfo(item, info) {
   if (!info) return;
-  if (info.overview) item.overview = info.overview;
+  // No pisar sinopsis del sitio si ya es larga (evita mezclar Phantom Blood con Steel Ball Run)
+  if (info.overview && !(item.overview && String(item.overview).length > 100)) item.overview = info.overview;
   if (info.backdrop) item.backdrop = info.backdrop;
+  // Poster TMDB: rellenar si falta, o si el del sitio puede ser placeholder/roto
+  if (info.poster) {
+    if (!item.poster) item.poster = info.poster;
+    else item.poster = info.poster; // TMDB suele ser más fiable cuando el match es bueno
+  }
   if (/^\d{4}$/.test(info.year || "")) item.year = info.year;
 }
 
@@ -464,9 +510,10 @@ async function enrichItems(items, cap) {
   let fresh = 0;
   const todo = [];
   for (const it of items) {
-    const hit = cacheGet((it.kind === "movie" ? "mov2:" : "ser2:") + it.id);
+    const hit = cacheGet((it.kind === "movie" ? "mov3:" : "ser3:") + it.id);
     if (hit) applyInfo(it, hit === "0" ? null : JSON.parse(hit));
-    else if (it.kind === "movie" && fresh < cap) {
+    else if (fresh < cap) {
+      // Series y películas: carátula/sinopsis TMDB (con match estricto)
       fresh++;
       todo.push(it);
     }
@@ -738,8 +785,15 @@ async function tmdbSeason(id, season, language) {
 async function tmdbEpisodes(title, year, maxNum) {
   const sp = splitTitle(title);
   if (sp.base.length < 2) return {};
-  const found = await kino.tmdb("/search/tv", { query: sp.base, language: "es-MX", include_adult: false });
-  const show = pickShow(found && found.results, year, sp.season, sp.marked);
+  const queries = [sp.base];
+  const beforeColon = sp.base.split(":")[0].trim();
+  if (beforeColon.length >= 4 && beforeColon !== sp.base) queries.unshift(beforeColon);
+  let show = null;
+  for (const q of queries) {
+    const found = await kino.tmdb("/search/tv", { query: q, language: "es-MX", include_adult: false });
+    show = pickShow(found && found.results, year, sp.season, sp.marked, q);
+    if (show) break;
+  }
   if (!show) return {};
   let eps = await tmdbSeason(show.id, sp.season, "es-MX");
   const byNum = {};
@@ -829,13 +883,25 @@ function parseAnimePage(html, slug) {
   const ogd = kino.html.select(html, "meta[property=og:description]")[0] || kino.html.select(html, "meta[name=description]")[0];
   if (ogd && ogd.attrs.content) {
     let text = ogd.attrs.content
-      .replace(/ver online[^.]*\.\s*/i, "")
-      .replace(/Mira[^.]*Sub Español[^.]*\.\s*/i, "")
-      .replace(/MonosChinos2?\s*/gi, "")
+      .replace(/ver online[\s\S]*?(?=MonosChinos2?\s+[A-ZÁÉÍÓÚÑa-záéíóúñ])/i, "")
+      .replace(/^[\s\S]*?MonosChinos2?\s+/i, "")
+      .replace(/ver online[^,]*,?/gi, "")
+      .replace(/Mira[^,]*,?/gi, "")
+      .replace(/online gratis,?/gi, "")
+      .replace(/en Sub Español[^,]*,?/gi, "")
+      .replace(/y descarga en[^,]*,?/gi, "")
+      .replace(/Monos\s*Chinos2?,?/gi, "")
       .replace(/\s+/g, " ")
       .trim();
+    // Si quedó basura de SEO, buscar la primera frase "real"
+    if (text.length < 40 || /^(ver|mira|online)/i.test(text)) {
+      const m = /([A-ZÁÉÍÓÚÑ][^.]{40,500}\.)/.exec(ogd.attrs.content);
+      if (m) text = m[1].trim();
+    }
     if (text.length > 40) info.overview = text.slice(0, 2000);
   }
+  // También póster TMDB si el del CDN falta o es placeholder
+  if (!info.poster) info.poster = posterFromSlug(slug, true);
   const genres = kino.html.select(html, "a[href*='genero=']").map((g) => g.text.trim()).filter(Boolean);
   if (genres.length) info.genres = genres.slice(0, 5).map((g) => g.slice(0, 30));
   const yearEl = kino.html.select(html, "span.year")[0] || kino.html.select(html, ".anio")[0];
@@ -917,7 +983,7 @@ export async function episodes(ref) {
   if (!m) throw fail("not_found", "ref " + ref, "badRef");
   const slug = m[1];
 
-  const key = "ep3:" + slug; // ep3: lista completa vía AJAX (antes ep1 solo veía 1 capítulo)
+  const key = "ep4:" + slug; // ep3: lista completa vía AJAX (antes ep1 solo veía 1 capítulo)
   const saved = savedGet(key);
   let data = saved && saved.data && Date.now() - saved.t < 10 * 60000 ? saved.data : null;
   if (!data) {
@@ -976,7 +1042,9 @@ export async function episodes(ref) {
         : null;
     if (extra && extra !== LATE) {
       if (extra.backdrop) info.backdrop = extra.backdrop;
+      // Solo rellenar sinopsis si la del sitio es muy corta (evita mezclar series de JoJo)
       if (extra.overview && (info.overview || "").length < 80) info.overview = extra.overview;
+      if (extra.poster) info.poster = extra.poster;
     }
   } catch (e) {
     kino.log("ficha sin TMDB: " + (e && e.message));
