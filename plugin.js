@@ -231,7 +231,12 @@ function cardsFrom(html, opts) {
     if (!slug || seen[slug]) return;
     if (opts.onlyEpisodes && !isEpisode) return;
     if (opts.onlyAnime && isEpisode) return;
-    if (!poster) poster = posterFromSlug(slug, !isEpisode);
+    // En emisión: siempre la portada del anime (vertical, nítida), no la captura del capítulo.
+    if (opts.onlyEpisodes || opts.preferAnimePoster) {
+      poster = posterFromSlug(slug, true);
+    } else if (!poster) {
+      poster = posterFromSlug(slug, !isEpisode);
+    }
     const item = mkItem(slug, title, poster, movie && !isEpisode);
     if (!item) return;
     seen[slug] = true;
@@ -591,7 +596,7 @@ function timeLeft() {
 const ROW_FRESH_MS = 10 * 60000;
 
 function savedRow(id) {
-  const raw = cacheGet("row2:" + id);
+  const raw = cacheGet("row3:" + id);
   if (!raw) return null;
   try {
     const saved = JSON.parse(raw);
@@ -609,7 +614,7 @@ function savedRow(id) {
 function saveRow(row, t) {
   try {
     const raw = JSON.stringify({ t: t || Date.now(), row });
-    if (raw.length < 40000) cacheSet("row2:" + row.id, raw, 12 * 3600000);
+    if (raw.length < 40000) cacheSet("row3:" + row.id, raw, 12 * 3600000);
   } catch (e) {
     /* sin copia */
   }
@@ -643,10 +648,10 @@ export async function home() {
   const loaded = {};
   const copyTime = {};
 
-  // En emisión: últimos capítulos de la home (uno por serie)
+  // En emisión: últimos capítulos de la home (uno por serie), con portada del anime
   const airingP = loadRow("en-emision", lang() === "en" ? "Airing" : "En emisión", async () => {
     const page = await getPage(BASE + "/", null, 9000);
-    const items = cardsFrom(page.html, { onlyEpisodes: true }).slice(0, 24);
+    const items = cardsFrom(page.html, { onlyEpisodes: true, preferAnimePoster: true }).slice(0, 24);
     return {
       id: "en-emision",
       title: lang() === "en" ? "Airing" : "En emisión",
@@ -667,24 +672,22 @@ export async function home() {
     };
   });
 
-  // En emisión del filtro del catálogo (alternativa / refuerzo)
-  const emisionP = loadRow("emision-cat", lang() === "en" ? "Currently airing" : "En emisión (catálogo)", async () => {
-    const page = await getPage(dirUrl("en-emision", 1), null, 9000);
-    const items = cardsFrom(page.html, { onlyAnime: true }).slice(0, 40);
+  // Películas
+  const moviesP = loadRow("peliculas", lang() === "en" ? "Movies" : "Películas", async () => {
+    const page = await getPage(dirUrl("type:pelicula", 1), null, 9000);
+    const items = cardsFrom(page.html, { onlyAnime: true, movies: true }).slice(0, 40);
     return {
-      id: "emision-cat",
-      title: lang() === "en" ? "Currently airing" : "En emisión",
+      id: "peliculas",
+      title: lang() === "en" ? "Movies" : "Películas",
       items,
-      next: items.length >= 20 ? "1" : undefined,
-      browse: "en-emision",
+      next: items.length >= 15 ? "1" : undefined,
+      browse: "type:pelicula",
     };
   });
 
-  const results = await Promise.all([airingP, animesP, emisionP]);
+  const results = await Promise.all([airingP, animesP, moviesP]);
   for (const r of results) {
     if (!r || !r.row || !r.row.items || !r.row.items.length) continue;
-    // Evitar dos filas "En emisión" casi iguales: preferir la de la home si tiene items
-    if (r.row.id === "emision-cat" && results[0] && results[0].row && results[0].row.items.length) continue;
     shown.push(r.row);
     loaded[r.row.id] = r.loaded;
     copyTime[r.row.id] = r.copyTime;
@@ -692,7 +695,7 @@ export async function home() {
 
   // Fondos para tarjetas horizontales en TV
   try {
-    const bdRows = shown.filter((r) => r.id === "en-emision" || r.id === "animes" || r.id === "emision-cat");
+    const bdRows = shown.filter((r) => r.id === "en-emision" || r.id === "animes" || r.id === "peliculas");
     if (bdRows.length) {
       const changed = await fillBackdrops(bdRows, 18, Math.min(3500, timeLeft() - 2500));
       for (const row of bdRows) {
@@ -805,6 +808,16 @@ function parseAnimePage(html, slug) {
   const re = new RegExp("/ver/" + slug.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + "-episodio-(\\d+)", "gi");
   let x;
   while ((x = re.exec(html))) nums[parseInt(x[1], 10)] = true;
+
+  // Metadatos del listado AJAX: <section id="dt" data-e="16" data-i="7286" data-u="slug">
+  // data-i = id interno del anime; data-e = total de capítulos.
+  let epId = "";
+  let epTotal = 0;
+  const mi = /id=["']dt["'][^>]*data-i=["'](\d+)["']|data-i=["'](\d+)["'][^>]*id=["']dt["']|data-i=["'](\d+)["']/.exec(html);
+  const me = /id=["']dt["'][^>]*data-e=["'](\d+)["']|data-e=["'](\d+)["'][^>]*id=["']dt["']|data-e=["'](\d+)["']/.exec(html);
+  if (mi) epId = mi[1] || mi[2] || mi[3] || "";
+  if (me) epTotal = parseInt(me[1] || me[2] || me[3] || "0", 10) || 0;
+
   const numbers = Object.keys(nums)
     .map(Number)
     .sort((a, b) => a - b)
@@ -813,7 +826,6 @@ function parseAnimePage(html, slug) {
   const info = {};
   const h1 = kino.html.select(html, "h1")[0];
   if (h1 && h1.text.trim()) info.title = h1.text.replace(/\s+/g, " ").trim().slice(0, 200);
-  // Sinopsis: meta description o párrafos
   const ogd = kino.html.select(html, "meta[property=og:description]")[0] || kino.html.select(html, "meta[name=description]")[0];
   if (ogd && ogd.attrs.content) {
     let text = ogd.attrs.content
@@ -839,7 +851,53 @@ function parseAnimePage(html, slug) {
     info.poster = imgUrl(img);
   }
   if (!info.poster) info.poster = posterFromSlug(slug, true);
-  return { numbers, info };
+  return { numbers, info, epId, epTotal };
+}
+
+// Lista de capítulos vía POST /ajax_pagination (acc=episodes). Páginas de 50.
+async function fetchEpisodeNumbers(slug, epId, epTotal) {
+  const nums = {};
+  if (!epId) return [];
+  const pages = Math.max(1, Math.ceil((epTotal || 50) / 50));
+  for (let p = 1; p <= Math.min(pages, 40); p++) {
+    try {
+      const r = await kino.fetch(BASE + "/ajax_pagination", {
+        method: "POST",
+        headers: {
+          "User-Agent": UA,
+          "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
+          Accept: "*/*",
+          "X-Requested-With": "XMLHttpRequest",
+          Referer: BASE + "/anime/" + slug,
+          Origin: BASE,
+        },
+        body: "acc=episodes&i=" + encodeURIComponent(epId) + "&u=" + encodeURIComponent(slug) + "&p=" + p,
+        timeoutMs: 12000,
+      });
+      if (!r.ok) break;
+      const html = r.text() || "";
+      const re = new RegExp("/ver/" + slug.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + "-episodio-(\\d+)", "gi");
+      let x;
+      let found = 0;
+      while ((x = re.exec(html))) {
+        nums[parseInt(x[1], 10)] = true;
+        found++;
+      }
+      if (!found) break;
+    } catch (e) {
+      kino.log("episodes ajax p=" + p + ": " + (e && e.message));
+      break;
+    }
+  }
+  let list = Object.keys(nums)
+    .map(Number)
+    .sort((a, b) => a - b);
+  // Si el AJAX falló pero conocemos el total, generar 1..N
+  if (!list.length && epTotal > 0) {
+    list = [];
+    for (let i = 1; i <= Math.min(epTotal, 2000); i++) list.push(i);
+  }
+  return list.slice(0, 2000);
 }
 
 function savedGet(key) {
@@ -859,13 +917,22 @@ export async function episodes(ref) {
   if (!m) throw fail("not_found", "ref " + ref, "badRef");
   const slug = m[1];
 
-  const key = "ep1:" + slug;
+  const key = "ep3:" + slug; // ep3: lista completa vía AJAX (antes ep1 solo veía 1 capítulo)
   const saved = savedGet(key);
   let data = saved && saved.data && Date.now() - saved.t < 10 * 60000 ? saved.data : null;
   if (!data) {
     try {
       const page = await getPage(BASE + "/anime/" + slug, null, 14000);
       data = parseAnimePage(page.html, slug);
+      // La ficha solo trae 0–2 enlaces; la lista completa va por AJAX (data-i / data-e).
+      if (data.epId && (data.numbers.length < 2 || (data.epTotal && data.numbers.length < data.epTotal))) {
+        const fromAjax = await fetchEpisodeNumbers(slug, data.epId, data.epTotal);
+        if (fromAjax.length) data.numbers = fromAjax;
+      }
+      if (!data.numbers.length && data.epTotal > 0) {
+        data.numbers = [];
+        for (let i = 1; i <= Math.min(data.epTotal, 2000); i++) data.numbers.push(i);
+      }
       if (data.numbers.length) cacheSet(key, JSON.stringify({ t: Date.now(), data }), 12 * 3600000);
     } catch (e) {
       if (!saved || !saved.data) throw e;
