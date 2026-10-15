@@ -1,0 +1,51 @@
+{
+  "id": "monoschinos",
+  "name": "MonosChinos",
+  "version": "1.1.0",
+  "apiVersion": 6,
+  "entry": "plugin.js",
+  "description": "Anime subtitulado en español de MonosChinos2 (Voe, Filemoon, StreamWish, Doodstream, MixDrop, Mp4Upload, LuluStream, Vidhide, Uqload, YourUpload).",
+  "author": "tu-usuario-de-github",
+  "hosts": [
+    "vww.monoschinos2.net",
+    "*.monoschinos2.net",
+    "monoschinos2.net"
+  ],
+  "fetchHosts": "any",
+  "streamHosts": "any",
+  "capabilities": [
+    "search",
+    "home",
+    "browse",
+    "episodes",
+    "resolve",
+    "download"
+  ],
+  "categories": [
+    "anime"
+  ],
+  "discoverable": true,
+  "debug": false,
+  "color": "#FF9B05",
+  "settings": [
+    {
+      "key": "server",
+      "label": "Servidor preferido",
+      "type": "select",
+      "default": "voe",
+      "hint": "Se intenta primero; el resto queda en el menú Servidor. Mega no se puede reproducir desde el plugin.",
+      "options": [
+        { "value": "voe", "label": "Voe" },
+        { "value": "streamwish", "label": "StreamWish" },
+        { "value": "filemoon", "label": "Filemoon" },
+        { "value": "mixdrop", "label": "MixDrop" },
+        { "value": "dood", "label": "Doodstream" },
+        { "value": "lulu", "label": "LuluStream" },
+        { "value": "vidhide", "label": "Vidhide" },
+        { "value": "mp4upload", "label": "Mp4Upload" },
+        { "value": "uqload", "label": "Uqload" },
+        { "value": "yourupload", "label": "YourUpload" }
+      ]
+    }
+  ]
+}
