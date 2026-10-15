@@ -1,7 +1,7 @@
 {
   "id": "monoschinos",
   "name": "MonosChinos",
-  "version": "1.1.1",
+  "version": "1.1.2",
   "apiVersion": 6,
   "entry": "plugin.js",
   "description": "Anime subtitulado en español de MonosChinos2 (Voe, Filemoon, StreamWish, Doodstream, MixDrop y más).",
@@ -35,16 +35,46 @@
       "default": "voe",
       "hint": "Se intenta primero; el resto queda en el menú Servidor.",
       "options": [
-        { "value": "voe", "label": "Voe" },
-        { "value": "streamwish", "label": "StreamWish" },
-        { "value": "filemoon", "label": "Filemoon" },
-        { "value": "mixdrop", "label": "MixDrop" },
-        { "value": "dood", "label": "Doodstream" },
-        { "value": "lulu", "label": "LuluStream" },
-        { "value": "vidhide", "label": "Vidhide" },
-        { "value": "mp4upload", "label": "Mp4Upload" },
-        { "value": "uqload", "label": "Uqload" },
-        { "value": "yourupload", "label": "YourUpload" }
+        {
+          "value": "voe",
+          "label": "Voe"
+        },
+        {
+          "value": "streamwish",
+          "label": "StreamWish"
+        },
+        {
+          "value": "filemoon",
+          "label": "Filemoon"
+        },
+        {
+          "value": "mixdrop",
+          "label": "MixDrop"
+        },
+        {
+          "value": "dood",
+          "label": "Doodstream"
+        },
+        {
+          "value": "lulu",
+          "label": "LuluStream"
+        },
+        {
+          "value": "vidhide",
+          "label": "Vidhide"
+        },
+        {
+          "value": "mp4upload",
+          "label": "Mp4Upload"
+        },
+        {
+          "value": "uqload",
+          "label": "Uqload"
+        },
+        {
+          "value": "yourupload",
+          "label": "YourUpload"
+        }
       ]
     }
   ]

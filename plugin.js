@@ -128,12 +128,33 @@ function abs(u, from) {
     const m = /^(https?:\/\/[^/]+)/i.exec(from || BASE);
     return (m ? m[1] : BASE) + u;
   }
+  if (u.indexOf("./") === 0) u = u.slice(2);
   return BASE + "/" + u;
 }
 
 function originOf(u) {
   const m = /^(https?:\/\/[^/?#]+)/i.exec(String(u));
   return m ? m[1] : "";
+}
+
+// Sin JS, src es un placeholder (anime.png / episode.png); la carátula real va en data-src.
+function imgUrl(img) {
+  if (!img || !img.attrs) return "";
+  const a = img.attrs;
+  const ds = a["data-src"] || a["data-lazy-src"] || a["data-original"] || "";
+  const src = a.src || "";
+  const pick = ds || src;
+  if (!pick) return "";
+  if (/\/cdn\/img\/(anime|episode|coverfb)\.png/i.test(pick)) {
+    if (ds && !/\/cdn\/img\/(anime|episode|coverfb)\.png/i.test(ds)) return abs(ds);
+    return "";
+  }
+  return abs(pick);
+}
+
+function posterFromSlug(slug, asAnime) {
+  if (!slug) return "";
+  return BASE + "/cdn/img/" + (asAnime ? "anime" : "portada") + "/" + slug + ".webp";
 }
 
 // ---------- 3. HTTP ----------
@@ -188,22 +209,51 @@ function parseVerHref(href) {
   return { slug: m[1], n: parseInt(m[2], 10) };
 }
 
-// Tarjetas del listado o de la home. /anime/slug = serie; /ver/slug-episodio-N = capítulo (solo para En emisión).
+function cleanTitle(raw, isEpisode) {
+  let title = String(raw || "")
+    .replace(/^Ver\s+/i, "")
+    .replace(/^Anime\s+/i, "")
+    .replace(/\s+Online\s+Gratis$/i, "")
+    .replace(/\s+capitulo\s+\d+$/i, "")
+    .replace(/\s+episodio\s+\d+$/i, "")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (isEpisode) title = title.replace(/\s+\d+$/, "").trim();
+  return title;
+}
+
+// Tarjetas del listado o de la home. /anime/slug = serie; /ver/slug-episodio-N = capítulo.
 function cardsFrom(html, opts) {
   opts = opts || {};
+  const items = [];
+  const seen = {};
+  const push = (slug, title, poster, isEpisode, movie) => {
+    if (!slug || seen[slug]) return;
+    if (opts.onlyEpisodes && !isEpisode) return;
+    if (opts.onlyAnime && isEpisode) return;
+    if (!poster) poster = posterFromSlug(slug, !isEpisode);
+    const item = mkItem(slug, title, poster, movie && !isEpisode);
+    if (!item) return;
+    seen[slug] = true;
+    items.push(item);
+  };
+
+  // 1) selectores CSS
   let boxes = kino.html.select(html, "article").map((a) => a.html);
   if (!boxes.length) boxes = kino.html.select(html, "li.col").map((a) => a.html);
   if (!boxes.length) boxes = kino.html.select(html, "li").map((a) => a.html);
-  const items = [];
-  const seen = {};
+  // Catálogo: enlaces directos a /anime/ sin <article>
+  if (!boxes.length || opts.onlyAnime) {
+    const anchors = kino.html.select(html, 'a[href*="/anime/"]').map((a) => a.html || "");
+    for (const a of anchors) if (a) boxes.push(a);
+  }
   for (const box of boxes) {
     const link = kino.html.select(box, "a[href]")[0];
     if (!link) continue;
     const href = link.attrs.href || "";
     let slug = "";
     let isEpisode = false;
-    let movie = false;
-    let m = /\/anime\/([^/?#]+)/.exec(href);
+    let m = /\/anime\/([^/?#"']+)/.exec(href);
     if (m) {
       slug = m[1];
     } else {
@@ -212,32 +262,47 @@ function cardsFrom(html, opts) {
       isEpisode = true;
       slug = ver.slug;
     }
-    if (opts.onlyEpisodes && !isEpisode) continue;
-    if (opts.onlyAnime && isEpisode) continue;
-    if (seen[slug]) continue;
-    const h3 = kino.html.select(box, "h3")[0] || kino.html.select(box, "p")[0] || kino.html.select(box, ".title_cap")[0];
     const img = kino.html.select(box, "img")[0];
-    let title =
-      (link.attrs.title || "").replace(/^Ver\s+/i, "").replace(/\s+capitulo\s+\d+$/i, "").replace(/\s+episodio\s+\d+$/i, "").trim() ||
-      (h3 && h3.text) ||
-      (img && img.attrs.alt) ||
-      link.text ||
-      "";
-    title = title.replace(/\s+/g, " ").trim();
-    if (isEpisode) title = title.replace(/\s+\d+$/, "").replace(/\s+capitulo\s+\d+$/i, "").trim();
-    // En MonosChinos las portadas de capítulos suelen ser la carátula real (cdn/img/portada/).
-    const src = img ? img.attrs.src || img.attrs["data-src"] || "" : "";
-    const typeText = box;
-    movie =
-      !isEpisode &&
-      (opts.movies ||
-        /Pel[ií]cula|Movie|tipo[^>]*>\s*Pel/i.test(typeText) ||
-        /cdn\/img\/anime\//.test(src) === false && /pelicula/i.test(slug));
-    if (/pelicula|movie/i.test(slug) && !isEpisode) movie = true;
-    const item = mkItem(slug, title, src ? abs(src) : "", movie);
-    if (!item) continue;
-    seen[slug] = true;
-    items.push(item);
+    let title = cleanTitle(
+      (link.attrs.title || "") ||
+        (img && img.attrs.alt) ||
+        link.text ||
+        "",
+      isEpisode
+    );
+    if (!title) title = slug.replace(/-/g, " ");
+    let poster = imgUrl(img);
+    const movie = !isEpisode && (opts.movies || /Pel[ií]cula/i.test(box) || /pelicula|movie/i.test(slug));
+    push(slug, title, poster, isEpisode, movie);
+  }
+
+  // 2) Fallback regex sobre el HTML crudo (más fiable si select falla)
+  if (items.length < 3) {
+    const reAnime = /href=["']([^"']*\/anime\/([^"'/?#]+))["'][^>]*>([\s\S]{0,800}?)<\/a>/gi;
+    let x;
+    while ((x = reAnime.exec(html))) {
+      const slug = x[2];
+      const chunk = x[0];
+      const imgM = /data-src=["']([^"']+)["']/i.exec(chunk) || /src=["']([^"']*cdn\/img\/[^"']+)["']/i.exec(chunk);
+      let poster = imgM ? abs(imgM[1]) : "";
+      if (/\/cdn\/img\/(anime|episode)\.png/i.test(poster)) poster = "";
+      const alt = /alt=["']([^"']+)["']/i.exec(chunk);
+      const tit = /title=["']([^"']+)["']/i.exec(chunk);
+      push(slug, cleanTitle((tit && tit[1]) || (alt && alt[1]) || slug, false), poster, false, opts.movies);
+    }
+    if (opts.onlyEpisodes || !opts.onlyAnime) {
+      const reVer = /href=["']([^"']*\/ver\/([^"'/?#]+)-episodio-(\d+))["'][^>]*>([\s\S]{0,800}?)<\/a>/gi;
+      while ((x = reVer.exec(html))) {
+        const slug = x[2];
+        const chunk = x[0];
+        const imgM = /data-src=["']([^"']+)["']/i.exec(chunk) || /src=["']([^"']*cdn\/img\/portada\/[^"']+)["']/i.exec(chunk);
+        let poster = imgM ? abs(imgM[1]) : "";
+        if (/\/cdn\/img\/(anime|episode)\.png/i.test(poster)) poster = "";
+        const alt = /alt=["']([^"']+)["']/i.exec(chunk);
+        const tit = /title=["']([^"']+)["']/i.exec(chunk);
+        push(slug, cleanTitle((tit && tit[1]) || (alt && alt[1]) || slug, true), poster, true, false);
+      }
+    }
   }
   return items;
 }
@@ -771,8 +836,9 @@ function parseAnimePage(html, slug) {
   if (og && og.attrs.content) info.poster = abs(og.attrs.content);
   if (!info.poster) {
     const img = kino.html.select(html, "img.lazy")[0] || kino.html.select(html, "img")[0];
-    if (img && (img.attrs.src || img.attrs["data-src"])) info.poster = abs(img.attrs.src || img.attrs["data-src"]);
+    info.poster = imgUrl(img);
   }
+  if (!info.poster) info.poster = posterFromSlug(slug, true);
   return { numbers, info };
 }
 
@@ -891,29 +957,41 @@ function listServers(html) {
   const out = [];
   out.skipped = [];
   const seen = {};
-  const buttons = kino.html.select(html, "button.play-video, button[data-player], .nav-link[data-player], li button");
-  for (const btn of buttons) {
-    const enc = btn.attrs["data-player"] || "";
-    const name = (btn.text || "").trim().toLowerCase();
-    if (!enc) continue;
+  const add = (enc, name) => {
+    if (!enc) return;
     let url = "";
     try {
       url = b64text(enc);
     } catch (e) {
-      continue;
+      return;
     }
     url = unslash(url);
-    if (!/^https?:\/\//i.test(url)) continue;
+    if (!/^https?:\/\//i.test(url)) return;
     const kind = detectKind(name, url);
     if (kind === "mega") {
       out.skipped.push(name || "Mega");
-      continue;
+      return;
     }
     const key = kind + "|" + url;
-    if (seen[key]) continue;
+    if (seen[key]) return;
     seen[key] = true;
     out.push({ kind, url, name: name || kind });
+  };
+
+  const buttons = kino.html.select(html, "button.play-video, button[data-player], .nav-link[data-player], li button");
+  for (const btn of buttons) {
+    add(btn.attrs["data-player"] || "", (btn.text || "").trim().toLowerCase());
   }
+  // Regex: el HTML del AJAX trae data-player en base64
+  const re = /data-player=["']([^"']+)["'][^>]*>([^<]*)</gi;
+  let m;
+  while ((m = re.exec(html))) {
+    add(m[1], String(m[2] || "").trim().toLowerCase());
+  }
+  // Alternativa: texto del botón antes del atributo
+  const re2 = />([a-z0-9 ._-]{2,30})<\/button>/gi;
+  // ya cubierto arriba
+
   if (!out.length) {
     const iframes = kino.html.select(html, "iframe[src]");
     for (const ifr of iframes) {
@@ -929,6 +1007,40 @@ function listServers(html) {
     }
   }
   return out;
+}
+
+// Los botones de servidor no vienen en el HTML inicial: se piden por POST a /ajax_pagination
+// con acc=opt e i=<data-encrypt del ul.opt>.
+async function fetchServerHtml(pageHtml, pageUrl) {
+  let encrypt = "";
+  const m =
+    /data-encrypt=["']([^"']+)["']/.exec(pageHtml) ||
+    /class="[^"]*opt[^"]*"[^>]*data-encrypt=["']([^"']+)["']/.exec(pageHtml);
+  if (m) encrypt = m[1];
+  if (!encrypt) {
+    const sel = kino.html.select(pageHtml, "[data-encrypt], ul.opt, .opt")[0];
+    if (sel && sel.attrs && sel.attrs["data-encrypt"]) encrypt = sel.attrs["data-encrypt"];
+  }
+  if (!encrypt) return pageHtml;
+  try {
+    const r = await kino.fetch(BASE + "/ajax_pagination", {
+      method: "POST",
+      headers: {
+        "User-Agent": UA,
+        "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
+        Accept: "*/*",
+        "X-Requested-With": "XMLHttpRequest",
+        Referer: pageUrl || BASE + "/",
+        Origin: BASE,
+      },
+      body: "acc=opt&i=" + encodeURIComponent(encrypt),
+      timeoutMs: 12000,
+    });
+    if (r.ok && r.text()) return r.text() + "\n" + pageHtml;
+  } catch (e) {
+    kino.log("ajax_pagination: " + (e && e.message));
+  }
+  return pageHtml;
 }
 
 function serverLabel(s, all) {
@@ -1243,7 +1355,9 @@ export async function resolve(ref) {
   if (!p) throw fail("not_found", "ref " + ref, "badRef");
 
   const page = await getPage(BASE + "/ver/" + p.slug + "-episodio-" + p.n);
-  const all = listServers(page.html);
+  // Los servidores se inyectan por AJAX (data-encrypt → POST /ajax_pagination).
+  const serversHtml = await fetchServerHtml(page.html, page.url);
+  const all = listServers(serversHtml);
   kino.log(
     "resolve: " +
       p.slug +
