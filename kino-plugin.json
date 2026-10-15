@@ -1,10 +1,10 @@
 {
   "id": "monoschinos",
   "name": "MonosChinos",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "apiVersion": 6,
   "entry": "plugin.js",
-  "description": "Anime subtitulado en español de MonosChinos2 (Voe, Filemoon, StreamWish, Doodstream, MixDrop, Mp4Upload, LuluStream, Vidhide, Uqload, YourUpload).",
+  "description": "Anime subtitulado en español de MonosChinos2 (Voe, Filemoon, StreamWish, Doodstream, MixDrop y más).",
   "author": "tu-usuario-de-github",
   "hosts": [
     "vww.monoschinos2.net",
@@ -33,7 +33,7 @@
       "label": "Servidor preferido",
       "type": "select",
       "default": "voe",
-      "hint": "Se intenta primero; el resto queda en el menú Servidor. Mega no se puede reproducir desde el plugin.",
+      "hint": "Se intenta primero; el resto queda en el menú Servidor.",
       "options": [
         { "value": "voe", "label": "Voe" },
         { "value": "streamwish", "label": "StreamWish" },
