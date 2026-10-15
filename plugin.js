@@ -788,37 +788,48 @@ async function tmdbSeason(id, season, language) {
 async function tmdbEpisodes(title, year, maxNum) {
   const sp = splitTitle(title);
   if (sp.base.length < 2) return {};
-  const queries = [sp.base];
+  // Palabras distintivas del título (no genéricas) deben aparecer en el resultado TMDB
+  const stop = { jojo: 1, jojos: 1, kimyou: 1, bouken: 1, no: 1, na: 1, the: 1, animation: 1, anime: 1, part: 1 };
+  const distinctive = wordsOf(sp.base).filter((w) => w.length >= 4 && !stop[w]);
+  const queries = [];
   const beforeColon = sp.base.split(":")[0].trim();
-  if (beforeColon.length >= 4 && beforeColon !== sp.base) queries.unshift(beforeColon);
+  if (beforeColon.length >= 4) queries.push(beforeColon);
+  queries.push(sp.base);
   let show = null;
+  let bestScore = 0;
   for (const q of queries) {
     const found = await kino.tmdb("/search/tv", { query: q, language: "es-MX", include_adult: false });
-    show = pickShow(found && found.results, year, sp.season, sp.marked, q);
-    if (show) break;
+    const hit = pickShow(found && found.results, year, sp.season, sp.marked, q);
+    if (!hit) continue;
+    const sc = titleScore(hit, q);
+    // Si el query tiene palabras distintivas (steel, ocean, diamond…), deben estar en el nombre TMDB
+    if (distinctive.length) {
+      const names = norm((hit.name || "") + " " + (hit.original_name || ""));
+      const ok = distinctive.filter((w) => names.indexOf(w) >= 0).length;
+      if (ok < Math.min(distinctive.length, 2) && ok / distinctive.length < 0.5) continue;
+    }
+    if (sc > bestScore) {
+      bestScore = sc;
+      show = hit;
+    }
   }
-  if (!show) return {};
+  // Sin match fiable: no inventar capítulos de otra serie (p. ej. Phantom Blood en Steel Ball Run)
+  if (!show || bestScore < 72) return {};
+  // Si el año del show dista mucho del del sitio, descartar
+  if (year > 1900) {
+    const y = parseInt(String(show.first_air_date || "").slice(0, 4), 10) || 0;
+    if (y && Math.abs(y - year) > 3) return {};
+  }
   let eps = await tmdbSeason(show.id, sp.season, "es-MX");
   const byNum = {};
-  if (!sp.marked && maxNum > eps.length) {
-    const detail = await kino.tmdb("/tv/" + show.id, { language: "es-MX" });
-    const seasons = ((detail && detail.seasons) || []).filter((x) => x.season_number > 0).slice(0, 10);
-    let offset = 0;
-    for (const se of seasons) {
-      const list = se.season_number === sp.season ? eps : await tmdbSeason(show.id, se.season_number, "es-MX");
-      for (const e of list) byNum[offset + e.episode_number] = e;
-      offset += list.length;
-    }
-  } else {
-    for (const e of eps) byNum[e.episode_number] = e;
-    const empty = eps.filter((e) => !e.overview).length;
-    if (eps.length && empty > eps.length / 2) {
-      try {
-        const en = await tmdbSeason(show.id, sp.season, "en-US");
-        for (const e of en) if (byNum[e.episode_number] && !byNum[e.episode_number].overview) byNum[e.episode_number].overview = e.overview;
-      } catch (err) {
-        /* sin respaldo */
-      }
+  for (const e of eps) byNum[e.episode_number] = e;
+  const empty = eps.filter((e) => !e.overview).length;
+  if (eps.length && empty > eps.length / 2) {
+    try {
+      const en = await tmdbSeason(show.id, sp.season, "en-US");
+      for (const e of en) if (byNum[e.episode_number] && !byNum[e.episode_number].overview) byNum[e.episode_number].overview = e.overview;
+    } catch (err) {
+      /* sin respaldo */
     }
   }
   const out = {};
@@ -837,7 +848,7 @@ async function tmdbEpisodes(title, year, maxNum) {
 
 async function episodeExtras(slug, title, year, maxNum) {
   if (typeof kino.tmdb !== "function") return {};
-  const key = "tmdb2:" + slug;
+  const key = "tmdb5:" + slug;
   try {
     const hit = kino.storage.get(key);
     if (hit) return JSON.parse(hit);
@@ -986,7 +997,7 @@ export async function episodes(ref) {
   if (!m) throw fail("not_found", "ref " + ref, "badRef");
   const slug = m[1];
 
-  const key = "ep4:" + slug; // ep3: lista completa vía AJAX (antes ep1 solo veía 1 capítulo)
+  const key = "ep5:" + slug; // ep3: lista completa vía AJAX (antes ep1 solo veía 1 capítulo)
   const saved = savedGet(key);
   let data = saved && saved.data && Date.now() - saved.t < 10 * 60000 ? saved.data : null;
   if (!data) {
@@ -1071,6 +1082,7 @@ const KIND_LABEL = {
   lulu: "LuluStream",
   vidhide: "Vidhide",
   uqload: "Uqload",
+  netu: "Netu",
   generic: "Servidor",
 };
 
@@ -1088,6 +1100,7 @@ function detectKind(name, url) {
   if (/lulu/i.test(n) || /lulu(?:stream|vdo|vid)\./i.test(u)) return "lulu";
   if (/vidhide|filelions|vidhidepro/i.test(n) || /vidhide|filelions\.|vidhidepro\./i.test(u)) return "vidhide";
   if (/uqload/i.test(n) || /uqload\./i.test(u)) return "uqload";
+  if (/netu|hqq|waaw|netu\./i.test(n) || /hqq\.|waaw\.|netu\.|younetu\./i.test(u)) return "netu";
   return "generic";
 }
 
@@ -1498,6 +1511,28 @@ async function uqloadStream(embed) {
   return streamResult(file, originOf(page.url) + "/");
 }
 
+// --- Netu / HQQ ---
+async function netuStream(embed) {
+  const page = await getPage(embed, { Referer: BASE + "/" });
+  const html = page.html;
+  if (/just a moment|cf-browser-verification|ddos-guard/i.test(html) && html.length < 15000) {
+    throw fail("unavailable", "Netu bloqueado por protección anti-bot", "serverFailed");
+  }
+  let file = findStreamUrl(html);
+  if (!file) {
+    const unpacked = unpackAll(html);
+    file = findStreamUrl(unpacked);
+  }
+  // Variante: src: '...m3u8'
+  if (!file) {
+    const m = /src\s*:\s*['"](https?:\/\/[^'"]+\.m3u8[^'"]*)['"]/i.exec(html);
+    if (m) file = m[1];
+  }
+  if (!file) throw fail("unavailable", goneIn(html) ? "Netu video borrado" : "Netu sin video", "serverFailed");
+  if (file.indexOf("//") === 0) file = "https:" + file;
+  return streamResult(file, originOf(page.url) + "/");
+}
+
 // --- Genérico: cualquier embed con m3u8/mp4 a la vista o empaquetado ---
 
 async function genericStream(embed) {
@@ -1531,6 +1566,8 @@ async function streamFor(s) {
       return mp4uploadStream(s.url);
     case "uqload":
       return uqloadStream(s.url);
+    case "netu":
+      return netuStream(s.url);
     default:
       return genericStream(s.url);
   }
@@ -1592,6 +1629,7 @@ export async function resolve(ref) {
         voe: 6,
         yourupload: 7,
         dood: 8,
+        netu: 9,
         filemoon: 18,
         streamwish: 19,
         generic: 20,
