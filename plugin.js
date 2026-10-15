@@ -1119,20 +1119,21 @@ function serverLabel(s, all) {
 // --- Dean Edwards packer (eval(function(p,a,c,k,e,d)...)) usado por Filemoon, StreamWish, MixDrop, etc. ---
 
 function jsUnpack(source) {
+  // Dean Edwards / JWPlayer packer: eval(function(p,a,c,k,e,d){...}('payload',radix,count,'words'.split('|'),0,{}))
   const m = /}\s*\(\s*'((?:\\'|[^'])*)'\s*,\s*(\d+)\s*,\s*(\d+)\s*,\s*'((?:\\'|[^'])*)'\s*\.split\s*\(\s*'\|'\s*\)/.exec(source);
   if (!m) return null;
   let payload = m[1].replace(/\\'/g, "'").replace(/\\\\/g, "\\");
-  const radix = parseInt(m[2], 10);
+  const radix = parseInt(m[2], 10) || 36;
   const count = parseInt(m[3], 10);
   const words = m[4].split("|");
   if (!words.length || !count) return null;
+  const chars = "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ";
   function toBase(n) {
-    const chars = "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ";
     if (n < radix) return chars.charAt(n);
     return toBase(Math.floor(n / radix)) + chars.charAt(n % radix);
   }
   for (let i = count - 1; i >= 0; i--) {
-    if (!words[i]) continue;
+    if (i >= words.length || !words[i]) continue;
     const token = toBase(i);
     payload = payload.replace(new RegExp("\\b" + token + "\\b", "g"), words[i]);
   }
@@ -1141,33 +1142,48 @@ function jsUnpack(source) {
 
 function unpackAll(html) {
   let text = String(html);
-  const re = /eval\s*\(\s*function\s*\(\s*p\s*,\s*a\s*,\s*c\s*,\s*k\s*,\s*e\s*,\s*[d|r]/g;
   let guard = 0;
-  while (guard++ < 6 && re.test(text)) {
+  while (guard++ < 8) {
     const start = text.search(/eval\s*\(\s*function\s*\(\s*p\s*,\s*a\s*,\s*c\s*,\s*k\s*,\s*e\s*,/);
     if (start < 0) break;
-    const chunk = text.slice(start, start + 120000);
+    // Coger un trozo generoso: el packer puede ser largo
+    const chunk = text.slice(start, start + 200000);
     const unpacked = jsUnpack(chunk);
-    if (!unpacked) break;
-    text = text.slice(0, start) + unpacked + text.slice(start + chunk.length);
+    if (!unpacked) {
+      // Saltar este eval y seguir buscando otros
+      text = text.slice(0, start) + " " + text.slice(start + 4);
+      continue;
+    }
+    // Sustituir solo hasta el cierre aproximado del eval
+    const endRel = chunk.search(/\)\s*\)\s*;?/);
+    const end = endRel > 0 ? start + endRel + 2 : start + Math.min(chunk.length, 5000);
+    text = text.slice(0, start) + "\n" + unpacked + "\n" + text.slice(end);
   }
   return text;
 }
 
 function findStreamUrl(html) {
-  const flat = unslash(html);
+  const flat = unslash(String(html));
   const patterns = [
-    /(?:file|src|source|sources?)\s*[:=]\s*["'](https?:\/\/[^"']+\.m3u8[^"']*)["']/i,
-    /(?:file|src|source)\s*[:=]\s*["'](https?:\/\/[^"']+\.mp4[^"']*)["']/i,
     /wurl\s*=\s*["']([^"']+)["']/i,
+    /(?:file|src|source)\s*[:=]\s*["'](https?:\/\/[^"']+\.m3u8[^"']*)["']/i,
+    /(?:file|src|source)\s*[:=]\s*["'](https?:\/\/[^"']+\.mp4[^"']*)["']/i,
     /["'](https?:\/\/[^"'\s\\<>]+\.m3u8[^"'\s\\<>]*)["']/i,
     /["'](https?:\/\/[^"'\s\\<>]+\.mp4[^"'\s\\<>]*)["']/i,
     /(https?:\/\/[^"'\s\\<>]+\.m3u8[^"'\s\\<>]*)/i,
     /(https?:\/\/[^"'\s\\<>]+\.mp4[^"'\s\\<>]*)/i,
+    // JWPlayer tras unpack: sources:[{file:"..."}] o src:"http..."
+    /sources?\s*[:=]\s*\[\s*\{\s*(?:file|src)\s*:\s*["']([^"']+)["']/i,
+    /["'](https?:\/\/[^"'\s\\<>]+\/hls2\/[^"'\s\\<>]+)["']/i,
+    /["'](https?:\/\/[^"'\s\\<>]+\/v2\/[^"'\s\\<>]+\.mp4[^"'\s\\<>]*)["']/i,
   ];
   for (const re of patterns) {
     const m = re.exec(flat);
-    if (m && m[1] && /^https?:\/\//i.test(m[1])) return m[1].replace(/&amp;/g, "&");
+    const u = m && (m[1] || m[0]);
+    if (!u) continue;
+    let url = String(u).replace(/&amp;/g, "&").trim();
+    if (url.indexOf("//") === 0) url = "https:" + url;
+    if (/^https?:\/\//i.test(url) && !/\.(js|css|png|jpg|jpeg|gif|svg|woff)/i.test(url.split("?")[0])) return url;
   }
   return "";
 }
@@ -1230,27 +1246,62 @@ function voeExtract(html) {
   return { hls: "", mp4: "" };
 }
 
+const VOE_MIRRORS = [
+  "voe.sx",
+  "jilliandescribecompany.com",
+  "donaldlineelse.com",
+  "voe-unblock.com",
+  "voeunblock.com",
+];
+
 async function voeStream(embed) {
-  let url = embed;
-  let html = "";
-  for (let hop = 0; hop < 3; hop++) {
-    const page = await getPage(url, { Referer: BASE + "/" });
-    html = page.html;
-    url = page.url;
-    const jm = /window\.location\.href\s*=\s*["']([^"']+)["']/.exec(html);
-    if (jm && /^https?:\/\//i.test(jm[1]) && jm[1] !== url) {
-      url = jm[1];
-      continue;
+  // Construir candidatos: URL original + mismos path en mirrors (Voe rota dominios y usa DDoS-Guard)
+  const pathM = /\/e\/([A-Za-z0-9]+)/.exec(embed);
+  const id = pathM ? pathM[1] : "";
+  const candidates = [embed];
+  if (id) {
+    for (const host of VOE_MIRRORS) {
+      const u = "https://" + host + "/e/" + id;
+      if (candidates.indexOf(u) < 0) candidates.push(u);
     }
-    break;
   }
-  const found = voeExtract(html);
-  const main = found.hls || found.mp4;
-  if (!main) throw fail("unavailable", (goneIn(html) ? "Voe video borrado en " : "Voe sin video en ") + url, "serverFailed");
-  const headers = { Referer: originOf(url) + "/", "User-Agent": UA };
-  const res = { url: main, headers, alts: [] };
-  if (found.hls && found.mp4) res.alts.push({ url: found.mp4, headers, label: "Voe MP4" });
-  return res;
+  let lastErr = "Voe sin video";
+  for (const start of candidates.slice(0, 4)) {
+    let url = start;
+    let html = "";
+    try {
+      for (let hop = 0; hop < 3; hop++) {
+        const page = await getPage(url, { Referer: BASE + "/" });
+        html = page.html;
+        url = page.url;
+        if (/ddos-guard|checking your browser|just a moment/i.test(html) && html.length < 5000) {
+          lastErr = "Voe bloqueado (DDoS-Guard)";
+          break;
+        }
+        const jm =
+          /window\.location\.(?:href|replace)\s*=\s*["']([^"']+)["']/.exec(html) ||
+          /window\.location\.replace\(\s*["']([^"']+)["']\s*\)/.exec(html);
+        if (jm && /^https?:\/\//i.test(jm[1]) && jm[1] !== url) {
+          url = jm[1];
+          continue;
+        }
+        break;
+      }
+      const found = voeExtract(html);
+      const main = found.hls || found.mp4;
+      if (!main) {
+        lastErr = goneIn(html) ? "Voe video borrado" : "Voe sin video en " + url;
+        continue;
+      }
+      const headers = { Referer: originOf(url) + "/", "User-Agent": UA };
+      const res = { url: main, headers, alts: [] };
+      if (found.hls && found.mp4) res.alts.push({ url: found.mp4, headers, label: "Voe MP4" });
+      return res;
+    } catch (e) {
+      lastErr = (e && e.message) || lastErr;
+    }
+  }
+  throw fail("unavailable", lastErr, "serverFailed");
 }
 
 // --- YourUpload ---
@@ -1320,13 +1371,20 @@ async function mixdropStream(embed) {
 async function packerStream(embed, label) {
   let url = embed;
   let html = "";
-  for (let hop = 0; hop < 2; hop++) {
-    const page = await getPage(url, { Referer: BASE + "/" });
+  for (let hop = 0; hop < 3; hop++) {
+    const page = await getPage(url, { Referer: BASE + "/", Origin: originOf(url) || BASE });
     html = page.html;
     url = page.url;
-    // Algunos Filemoon meten el player en un iframe interno
+    // SPA de Filemoon/Byse: no hay packer, solo un shell React → no se puede extraer sin navegador
+    if (/Byse Frontend|id="root"|assets\/index-[A-Za-z0-9_-]+\.js/i.test(html) && !/eval\s*\(\s*function\s*\(\s*p\s*,\s*a\s*,\s*c\s*,\s*k/i.test(html)) {
+      throw fail("unavailable", label + " usa un reproductor protegido (SPA); prueba MixDrop, Mp4Upload o LuluStream", "serverFailed");
+    }
+    // Cloudflare / DDoS-Guard / challenge
+    if (/just a moment|cf-browser-verification|ddos-guard|checking your browser|error code:\s*1005/i.test(html) && html.length < 20000) {
+      throw fail("unavailable", label + " bloqueado por protección anti-bot", "serverFailed");
+    }
     const ifr = /<iframe[^>]+src=["']([^"']+)["']/i.exec(html);
-    if (ifr && /filemoon|moon|streamwish|lulu|vidhide|filelions/i.test(ifr[1]) && ifr[1] !== url) {
+    if (ifr && /filemoon|moon|streamwish|lulu|vidhide|filelions|byse/i.test(ifr[1]) && ifr[1] !== url) {
       url = abs(ifr[1], page.url);
       continue;
     }
@@ -1445,13 +1503,28 @@ export async function resolve(ref) {
 
   let order;
   if (p.idx >= 0) {
-    order = all[p.idx] ? [all[p.idx]] : [];
+    // Servidor concreto del menú: lo intentamos primero y, si falla, el resto como respaldo.
+    const picked = all[p.idx];
+    order = picked ? [picked].concat(all.filter((s, i) => i !== p.idx)) : all.slice();
   } else {
-    const pref = String(kino.config.get("server") || "voe");
-    // Preferido primero; luego un orden estable por fiabilidad relativa.
+    const pref = String(kino.config.get("server") || "mixdrop");
+    // Orden por fiabilidad real (fetch sin navegador): MixDrop/Mp4Upload/Uqload/Lulu suelen abrir;
+    // Filemoon (SPA) y StreamWish (Cloudflare) fallan a menudo desde el plugin.
     const rank = (k) => {
       if (k === pref) return 0;
-      const orderMap = { voe: 1, streamwish: 2, filemoon: 3, mixdrop: 4, dood: 5, lulu: 6, vidhide: 7, mp4upload: 8, uqload: 9, yourupload: 10, generic: 20 };
+      const orderMap = {
+        mixdrop: 1,
+        mp4upload: 2,
+        uqload: 3,
+        lulu: 4,
+        vidhide: 5,
+        voe: 6,
+        yourupload: 7,
+        dood: 8,
+        filemoon: 18,
+        streamwish: 19,
+        generic: 20,
+      };
       return orderMap[k] != null ? orderMap[k] : 15;
     };
     order = all.slice().sort((a, b) => rank(a.kind) - rank(b.kind));
@@ -1461,8 +1534,15 @@ export async function resolve(ref) {
   let used = null;
   const rest = [];
   const failures = [];
-  for (const s of order) {
+  // Probar varios hosts: los protegidos fallan rápido; los buenos abren.
+  const maxTries = Math.min(order.length, 8);
+  for (let i = 0; i < order.length; i++) {
+    const s = order[i];
     if (main) {
+      rest.push(s);
+      continue;
+    }
+    if (i >= maxTries) {
       rest.push(s);
       continue;
     }

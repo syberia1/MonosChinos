@@ -1,7 +1,7 @@
 {
   "id": "monoschinos",
   "name": "MonosChinos",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "apiVersion": 6,
   "entry": "plugin.js",
   "description": "Anime subtitulado en español de MonosChinos2 (Voe, Filemoon, StreamWish, Doodstream, MixDrop y más).",
@@ -32,36 +32,12 @@
       "key": "server",
       "label": "Servidor preferido",
       "type": "select",
-      "default": "voe",
-      "hint": "Se intenta primero; el resto queda en el menú Servidor.",
+      "default": "mixdrop",
+      "hint": "MixDrop/Mp4Upload suelen ir mejor; Filemoon y StreamWish a menudo fallan.",
       "options": [
-        {
-          "value": "voe",
-          "label": "Voe"
-        },
-        {
-          "value": "streamwish",
-          "label": "StreamWish"
-        },
-        {
-          "value": "filemoon",
-          "label": "Filemoon"
-        },
         {
           "value": "mixdrop",
           "label": "MixDrop"
-        },
-        {
-          "value": "dood",
-          "label": "Doodstream"
-        },
-        {
-          "value": "lulu",
-          "label": "LuluStream"
-        },
-        {
-          "value": "vidhide",
-          "label": "Vidhide"
         },
         {
           "value": "mp4upload",
@@ -72,8 +48,32 @@
           "label": "Uqload"
         },
         {
+          "value": "lulu",
+          "label": "LuluStream"
+        },
+        {
+          "value": "vidhide",
+          "label": "Vidhide"
+        },
+        {
+          "value": "voe",
+          "label": "Voe"
+        },
+        {
           "value": "yourupload",
           "label": "YourUpload"
+        },
+        {
+          "value": "dood",
+          "label": "Doodstream"
+        },
+        {
+          "value": "filemoon",
+          "label": "Filemoon"
+        },
+        {
+          "value": "streamwish",
+          "label": "StreamWish"
         }
       ]
     }
