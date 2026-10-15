@@ -222,7 +222,14 @@ function cleanTitle(raw, isEpisode) {
   return title;
 }
 
-// Tarjetas del listado o de la home. /anime/slug = serie; /ver/slug-episodio-N = capítulo.
+// Extrae un bloque de tarjeta a partir de un href encontrado en el HTML.
+function cardChunkAround(html, index, hrefLen) {
+  const from = Math.max(0, index - 80);
+  const to = Math.min(html.length, index + hrefLen + 900);
+  return html.slice(from, to);
+}
+
+// Tarjetas del listado o de la home. Deduplica siempre por slug.
 function cardsFrom(html, opts) {
   opts = opts || {};
   const items = [];
@@ -231,84 +238,58 @@ function cardsFrom(html, opts) {
     if (!slug || seen[slug]) return;
     if (opts.onlyEpisodes && !isEpisode) return;
     if (opts.onlyAnime && isEpisode) return;
-    // En emisión: siempre la portada del anime (vertical, nítida), no la captura del capítulo.
     if (opts.onlyEpisodes || opts.preferAnimePoster) {
       poster = posterFromSlug(slug, true);
     } else if (!poster) {
       poster = posterFromSlug(slug, !isEpisode);
     }
+    // Quitar query ?t=0.3 de portadas (a veces falla el CDN)
+    if (poster) poster = String(poster).replace(/\?t=[^&]+/, "");
     const item = mkItem(slug, title, poster, movie && !isEpisode);
     if (!item) return;
     seen[slug] = true;
     items.push(item);
   };
 
-  // 1) selectores CSS
-  let boxes = kino.html.select(html, "article").map((a) => a.html);
-  if (!boxes.length) boxes = kino.html.select(html, "li.col").map((a) => a.html);
-  if (!boxes.length) boxes = kino.html.select(html, "li").map((a) => a.html);
-  // Catálogo: enlaces directos a /anime/ sin <article>
-  if (!boxes.length || opts.onlyAnime) {
-    const anchors = kino.html.select(html, 'a[href*="/anime/"]').map((a) => a.html || "");
-    for (const a of anchors) if (a) boxes.push(a);
-  }
-  for (const box of boxes) {
-    const link = kino.html.select(box, "a[href]")[0];
-    if (!link) continue;
-    const href = link.attrs.href || "";
-    let slug = "";
-    let isEpisode = false;
-    let m = /\/anime\/([^/?#"']+)/.exec(href);
-    if (m) {
-      slug = m[1];
-    } else {
-      const ver = parseVerHref(href);
-      if (!ver) continue;
-      isEpisode = true;
-      slug = ver.slug;
-    }
-    const img = kino.html.select(box, "img")[0];
-    let title = cleanTitle(
-      (link.attrs.title || "") ||
-        (img && img.attrs.alt) ||
-        link.text ||
-        "",
-      isEpisode
-    );
-    if (!title) title = slug.replace(/-/g, " ");
-    let poster = imgUrl(img);
-    const movie = !isEpisode && (opts.movies || /Pel[ií]cula/i.test(box) || /pelicula|movie/i.test(slug));
-    push(slug, title, poster, isEpisode, movie);
-  }
-
-  // 2) Fallback regex sobre el HTML crudo (más fiable si select falla)
-  if (items.length < 3) {
-    const reAnime = /href=["']([^"']*\/anime\/([^"'/?#]+))["'][^>]*>([\s\S]{0,800}?)<\/a>/gi;
+  // --- Anime: regex único sobre el HTML (evita duplicar article + anchor + fallback) ---
+  if (opts.onlyAnime || (!opts.onlyEpisodes && !opts.preferAnimePoster)) {
+    const reAnime = /href=["']([^"']*\/anime\/([^"'/?#]+))["']/gi;
     let x;
     while ((x = reAnime.exec(html))) {
       const slug = x[2];
-      const chunk = x[0];
-      const imgM = /data-src=["']([^"']+)["']/i.exec(chunk) || /src=["']([^"']*cdn\/img\/[^"']+)["']/i.exec(chunk);
+      if (seen[slug]) continue;
+      const chunk = cardChunkAround(html, x.index, x[0].length);
+      const imgM =
+        /data-src=["']([^"']*cdn\/img\/[^"']+)["']/i.exec(chunk) ||
+        /src=["']([^"']*cdn\/img\/anime\/[^"']+)["']/i.exec(chunk);
       let poster = imgM ? abs(imgM[1]) : "";
-      if (/\/cdn\/img\/(anime|episode)\.png/i.test(poster)) poster = "";
+      if (/\/cdn\/img\/(anime|episode|coverfb)\.png/i.test(poster)) poster = "";
       const alt = /alt=["']([^"']+)["']/i.exec(chunk);
       const tit = /title=["']([^"']+)["']/i.exec(chunk);
-      push(slug, cleanTitle((tit && tit[1]) || (alt && alt[1]) || slug, false), poster, false, opts.movies);
-    }
-    if (opts.onlyEpisodes || !opts.onlyAnime) {
-      const reVer = /href=["']([^"']*\/ver\/([^"'/?#]+)-episodio-(\d+))["'][^>]*>([\s\S]{0,800}?)<\/a>/gi;
-      while ((x = reVer.exec(html))) {
-        const slug = x[2];
-        const chunk = x[0];
-        const imgM = /data-src=["']([^"']+)["']/i.exec(chunk) || /src=["']([^"']*cdn\/img\/portada\/[^"']+)["']/i.exec(chunk);
-        let poster = imgM ? abs(imgM[1]) : "";
-        if (/\/cdn\/img\/(anime|episode)\.png/i.test(poster)) poster = "";
-        const alt = /alt=["']([^"']+)["']/i.exec(chunk);
-        const tit = /title=["']([^"']+)["']/i.exec(chunk);
-        push(slug, cleanTitle((tit && tit[1]) || (alt && alt[1]) || slug, true), poster, true, false);
-      }
+      let title = cleanTitle((tit && tit[1]) || (alt && alt[1]) || "", false);
+      if (!title) title = slug.replace(/-/g, " ");
+      const movie = !!(opts.movies || /pelicula|movie/i.test(slug) || /Pel[ií]cula/i.test(chunk));
+      push(slug, title, poster, false, movie);
     }
   }
+
+  // --- Capítulos (En emisión): /ver/slug-episodio-N ---
+  if (opts.onlyEpisodes || opts.preferAnimePoster || (!opts.onlyAnime && !items.length)) {
+    const reVer = /href=["']([^"']*\/ver\/([^"'/?#]+)-episodio-(\d+))["']/gi;
+    let x;
+    while ((x = reVer.exec(html))) {
+      const slug = x[2];
+      if (seen[slug]) continue;
+      const chunk = cardChunkAround(html, x.index, x[0].length);
+      const alt = /alt=["']([^"']+)["']/i.exec(chunk);
+      const tit = /title=["']([^"']+)["']/i.exec(chunk);
+      let title = cleanTitle((tit && tit[1]) || (alt && alt[1]) || "", true);
+      if (!title) title = slug.replace(/-/g, " ");
+      // Portada del anime, no la captura del capítulo
+      push(slug, title, posterFromSlug(slug, true), true, false);
+    }
+  }
+
   return items;
 }
 
@@ -436,7 +417,8 @@ function pickShow(results, year, season, marked, query) {
       }
       return { r, score };
     })
-    .filter((x) => x.score >= 55)
+    // Umbral alto: evita cruzar partes de JoJo (Stone Ocean vs Steel Ball Run vs Phantom Blood)
+    .filter((x) => x.score >= 72)
     .sort((a, b) => b.score - a.score);
   return scored.length ? scored[0].r : null;
 }
@@ -485,7 +467,7 @@ async function seriesInfo(title, year) {
 }
 
 async function infoFor(item) {
-  const key = (item.kind === "movie" ? "mov3:" : "ser3:") + item.id;
+  const key = (item.kind === "movie" ? "mov4:" : "ser4:") + item.id;
   const hit = cacheGet(key);
   if (hit) return hit === "0" ? null : JSON.parse(hit);
   const info = item.kind === "movie" ? await movieInfo(item.title) : await seriesInfo(item.title, item.year);
@@ -495,25 +477,30 @@ async function infoFor(item) {
 
 function applyInfo(item, info) {
   if (!info) return;
-  // No pisar sinopsis del sitio si ya es larga (evita mezclar Phantom Blood con Steel Ball Run)
-  if (info.overview && !(item.overview && String(item.overview).length > 100)) item.overview = info.overview;
-  if (info.backdrop) item.backdrop = info.backdrop;
-  // Poster TMDB: rellenar si falta, o si el del sitio puede ser placeholder/roto
-  if (info.poster) {
-    if (!item.poster) item.poster = info.poster;
-    else item.poster = info.poster; // TMDB suele ser más fiable cuando el match es bueno
-  }
-  if (/^\d{4}$/.test(info.year || "")) item.year = info.year;
+  // Nunca pisar sinopsis del sitio si ya es razonable
+  if (info.overview && !(item.overview && String(item.overview).length > 80)) item.overview = info.overview;
+  if (info.backdrop && !item.backdrop) item.backdrop = info.backdrop;
+  // NUNCA sustituir la portada del sitio por TMDB (mezclaba Stone Ocean ↔ Steel Ball Run).
+  // Solo rellenar si el ítem no trae poster.
+  if (info.poster && !item.poster) item.poster = info.poster;
+  if (/^\d{4}$/.test(info.year || "") && !item.year) item.year = info.year;
 }
 
 async function enrichItems(items, cap) {
+  // Enrich ligero: solo backdrops/overview para películas o ítems sin poster.
+  // No tocar portadas que ya vienen del catálogo del sitio.
   let fresh = 0;
   const todo = [];
   for (const it of items) {
-    const hit = cacheGet((it.kind === "movie" ? "mov3:" : "ser3:") + it.id);
-    if (hit) applyInfo(it, hit === "0" ? null : JSON.parse(hit));
-    else if (fresh < cap) {
-      // Series y películas: carátula/sinopsis TMDB (con match estricto)
+    const key = (it.kind === "movie" ? "mov4:" : "ser4:") + it.id;
+    const hit = cacheGet(key);
+    if (hit) {
+      applyInfo(it, hit === "0" ? null : JSON.parse(hit));
+      continue;
+    }
+    if (fresh >= cap) continue;
+    // Priorizar los que no tienen poster o son películas
+    if (!it.poster || it.kind === "movie") {
       fresh++;
       todo.push(it);
     }
@@ -623,14 +610,11 @@ export async function search(query) {
   const q = cleanQuery(query && query.q);
   if (q.length < 2) return [];
   const page = await getPage(dirUrl("", 1, q));
-  const items = cardsFrom(page.html, { onlyAnime: true }).slice(0, 50);
-  if (!items.length) {
-    // Fallback: a veces la búsqueda mezcla capítulos
-    const all = cardsFrom(page.html).slice(0, 50);
-    await within(enrichItems(all, 6), 4000);
-    return all;
-  }
-  await within(enrichItems(items, 6), 4000);
+  // Solo fichas /anime/…, un resultado por slug (sin TMDB que pise portadas)
+  const items = cardsFrom(page.html, { onlyAnime: true }).slice(0, 40);
+  // Enrich mínimo: solo ítems sin poster (p. ej. CDN roto)
+  const needPoster = items.filter((it) => !it.poster).slice(0, 4);
+  if (needPoster.length) await within(enrichItems(needPoster, 4), 3500);
   return items;
 }
 
@@ -1044,7 +1028,7 @@ export async function episodes(ref) {
       if (extra.backdrop) info.backdrop = extra.backdrop;
       // Solo rellenar sinopsis si la del sitio es muy corta (evita mezclar series de JoJo)
       if (extra.overview && (info.overview || "").length < 80) info.overview = extra.overview;
-      if (extra.poster) info.poster = extra.poster;
+      if (extra.poster && !info.poster) info.poster = extra.poster;
     }
   } catch (e) {
     kino.log("ficha sin TMDB: " + (e && e.message));
