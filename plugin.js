@@ -1,4 +1,4 @@
-// MonosChinos Kino plugin 3.1.0 - https://monoschinos.st
+// MonosChinos Kino plugin 3.2.0 - https://monoschinos.st
 // Modelo TioAnime: r.text() metodo, kino.html.select, hosts de redirects.
 
 const BASE = "https://monoschinos.st";
@@ -104,32 +104,31 @@ function decodeHtml(s) {
     .replace(/&nbsp;/g, " ");
 }
 
-// Thumbs .jpg.webp -> JPEG estable del CDN del sitio
+// Normaliza imagenes del sitio a JPEG del CDN (thumbs/*.jpg.webp -> img/serie/*/*.jpg)
 function cleanImg(u) {
   u = abs(u);
-  if (!u || /anime\.png|capblank/i.test(u)) return "";
-  u = u.replace(/\?v=\d+/g, "").replace(/\?t=[^&]+/g, "").replace(/#.*$/, "");
-  let m = /\/assets\/thumbs\/imagen\/([^/?#]+?)(?:\.jpg)?(?:\.webp)?$/i.exec(u);
-  if (m) return BASE + "/assets/img/serie/imagen/" + m[1].replace(/\.jpg$/i, "") + ".jpg";
-  m = /\/assets\/thumbs\/portada\/([^/?#]+?)(?:\.jpg)?(?:\.webp)?$/i.exec(u);
-  if (m) return BASE + "/assets/img/serie/portada/" + m[1].replace(/\.jpg$/i, "") + ".jpg";
+  if (!u || /anime\.png|capblank|placeholder/i.test(u)) return "";
+  u = u.replace(/[?#].*$/, "");
+  // /assets/thumbs/imagen/NAME.jpg.webp  OR  NAME.webp  OR  NAME.jpg
+  let m = /\/assets\/thumbs\/imagen\/([^/]+)$/i.exec(u);
+  if (m) {
+    let name = m[1].replace(/\.(webp|jpg|jpeg|png)$/i, "");
+    name = name.replace(/\.(webp|jpg|jpeg|png)$/i, "");
+    return BASE + "/assets/img/serie/imagen/" + name + ".jpg";
+  }
+  m = /\/assets\/thumbs\/portada\/([^/]+)$/i.exec(u);
+  if (m) {
+    let name = m[1].replace(/\.(webp|jpg|jpeg|png)$/i, "");
+    name = name.replace(/\.(webp|jpg|jpeg|png)$/i, "");
+    return BASE + "/assets/img/serie/portada/" + name + ".jpg";
+  }
+  // Ya es /assets/img/serie/... : quitar .webp si viniera
   u = u.replace(/\.jpg\.webp$/i, ".jpg").replace(/\.webp$/i, ".jpg");
   return u;
 }
 function posterToBackdrop(poster) {
-  const u = String(poster || "");
-  const m = /\/assets\/img\/serie\/imagen\/([^/?#]+?)-(\d+)\.jpg/i.exec(u);
-  if (m) {
-    const name = m[1].replace(/-T\d+$/i, "");
-    return BASE + "/assets/img/serie/portada/" + name + "-portada-" + m[2] + ".jpg";
-  }
-  const m2 = /\/assets\/img\/serie\/imagen\/([^/?#]+)\.jpg/i.exec(u);
-  if (m2) {
-    const base = m2[1].replace(/-T\d+$/i, "");
-    const idm = /-(\d+)$/.exec(base);
-    if (idm) return BASE + "/assets/img/serie/portada/" + base.replace(/-\d+$/, "") + "-portada-" + idm[1] + ".jpg";
-  }
-  return "";
+  // El sitio no publica un banner aparte fiable: usar el mismo poster como fondo
+  return String(poster || "");
 }
 
 async function getPage(url, headers, timeoutMs) {
@@ -175,67 +174,40 @@ function mkItem(slug, title, poster, movie) {
   return item;
 }
 
-// Como TioAnime: kino.html.select sobre <article>
+// Tarjetas <article>: regex fiable sobre data-src (src es placeholder anime.png)
 function cardsFrom(html, opts) {
   opts = opts || {};
-  let boxes = [];
-  try {
-    boxes = kino.html.select(html, "article").map(function (a) { return a.html; });
-  } catch (e) {
-    boxes = [];
-  }
-  if (!boxes.length) {
-    // Fallback regex por si select falla
-    const re = /<article[\s\S]*?<\/article>/gi;
-    let m;
-    while ((m = re.exec(String(html || "")))) boxes.push(m[0]);
-  }
   const items = [];
   const seen = {};
-  for (let i = 0; i < boxes.length; i++) {
-    const box = boxes[i];
-    let href = "";
-    let title = "";
-    let src = "";
-    try {
-      const links = kino.html.select(box, "a[href]");
-      if (links && links[0] && links[0].attrs) href = links[0].attrs.href || "";
-      const h3s = kino.html.select(box, "h3");
-      if (h3s && h3s[0]) title = (h3s[0].text || "").replace(/\s+/g, " ").trim();
-      const imgs = kino.html.select(box, "img");
-      if (imgs && imgs[0] && imgs[0].attrs) {
-        src = imgs[0].attrs["data-src"] || imgs[0].attrs.src || "";
-        if (!title && imgs[0].attrs.alt) title = String(imgs[0].attrs.alt).trim();
-      }
-    } catch (e) {
-      // regex fallback
-      const hm = /href=["']([^"']*\/anime\/[^"']+)["']/i.exec(box);
-      if (hm) href = hm[1];
-      const h3 = /<h3[^>]*>([^<]+)/i.exec(box);
-      if (h3) title = decodeHtml(h3[1]).replace(/\s+/g, " ").trim();
-      const ds = /data-src=["']([^"']+)["']/i.exec(box);
-      if (ds) src = ds[1];
-    }
-    if (!href) {
-      const hm = /href=["']([^"']*\/anime\/[^"']+)["']/i.exec(box);
-      if (hm) href = hm[1];
-    }
-    const sm = /\/anime\/([A-Za-z0-9._~-]+)/.exec(href);
-    if (!sm) continue;
-    const slug = sm[1];
-    if (seen[slug]) continue;
+  const re = /<article[\s\S]*?<\/article>/gi;
+  let m;
+  while ((m = re.exec(String(html || "")))) {
+    const box = m[0];
+    const hm = /href=["']([^"']*\/anime\/([^"'/?#]+))["']/i.exec(box);
+    if (!hm) continue;
+    const slug = hm[2];
+    if (!slug || seen[slug]) continue;
     seen[slug] = true;
+
+    let title = "";
+    const h3 = /<h3[^>]*>([^<]{2,220})/i.exec(box);
+    if (h3) title = decodeHtml(h3[1]).replace(/\s+/g, " ").trim();
     if (!title) {
-      const h3 = /<h3[^>]*>([^<]+)/i.exec(box);
-      if (h3) title = decodeHtml(h3[1]).replace(/\s+/g, " ").trim();
+      const al = /alt=["']([^"']+)["']/i.exec(box);
+      if (al) title = decodeHtml(al[1]).trim();
     }
     if (!title) title = slug.replace(/-sub-espanol$/i, "").replace(/-/g, " ");
-    if (!src) {
-      const ds = /data-src=["']([^"']+)["']/i.exec(box);
-      if (ds) src = ds[1];
+
+    // data-src tiene la caratula real; src suele ser /img/anime.png
+    let src = "";
+    const ds = /data-src=["']([^"']+)["']/i.exec(box);
+    if (ds) src = ds[1];
+    if (!src || /anime\.png/i.test(src)) {
+      const ss = /src=["']([^"']*assets[^"']+)["']/i.exec(box);
+      if (ss) src = ss[1];
     }
     const poster = cleanImg(src);
-    const movie = !!opts.movies || /pelicula|movie/i.test(box) || /tipo=pelicula/i.test(href);
+    const movie = !!opts.movies;
     const item = mkItem(slug, title, poster, movie);
     if (item) items.push(item);
   }
@@ -262,31 +234,35 @@ export async function search(query) {
 export async function home() {
   const rows = [];
 
-  // 1) En emision
+  // 1) En emision = "Series recientes" de la portada (el filtro ?estado= no cambia el HTML del sitio)
   try {
-    const page = await getPage(BASE + "/animes?estado=en+emision");
-    const items = cardsFrom(page.html);
-    kino.log("home emision: " + items.length + (items[0] && items[0].poster ? " p=" + items[0].poster.slice(-40) : ""));
+    const page = await getPage(BASE + "/");
+    let slice = page.html;
+    const a = page.html.indexOf("Series recientes");
+    const b = page.html.indexOf("Generos populares");
+    if (a >= 0) slice = page.html.slice(a, b > a ? b : a + 60000);
+    const items = cardsFrom(slice);
+    kino.log("home emision: " + items.length + (items[0] && items[0].poster ? " p=" + items[0].poster : " SIN POSTER"));
     if (items.length) rows.push({ id: "emision", title: "En emision", items: items.slice(0, 24) });
   } catch (e) {
     kino.log("home emision: " + ((e && e.message) || e));
   }
 
-  // 2) Animes (listado general)
+  // 2) Animes = listado general
   try {
     const page = await getPage(BASE + "/animes");
     const items = cardsFrom(page.html);
-    kino.log("home animes: " + items.length + (items[0] && items[0].poster ? " p=" + items[0].poster.slice(-40) : ""));
+    kino.log("home animes: " + items.length + (items[0] && items[0].poster ? " p=" + items[0].poster : " SIN POSTER"));
     if (items.length) rows.push({ id: "animes", title: "Animes", items: items.slice(0, 24) });
   } catch (e) {
     kino.log("home animes: " + ((e && e.message) || e));
   }
 
-  // 3) Peliculas
+  // 3) Peliculas = categoria=pelicula (tipo= no funciona en el sitio)
   try {
-    const page = await getPage(BASE + "/animes?tipo=pelicula");
+    const page = await getPage(BASE + "/animes?categoria=pelicula");
     const items = cardsFrom(page.html, { movies: true });
-    kino.log("home peliculas: " + items.length + (items[0] && items[0].poster ? " p=" + items[0].poster.slice(-40) : ""));
+    kino.log("home peliculas: " + items.length + (items[0] && items[0].poster ? " p=" + items[0].poster : " SIN POSTER"));
     if (items.length) rows.push({ id: "peliculas", title: "Peliculas", items: items.slice(0, 24) });
   } catch (e) {
     kino.log("home peliculas: " + ((e && e.message) || e));
@@ -299,9 +275,15 @@ export async function browse(ref, cursor) {
   const pageNum = Math.max(1, parseInt(cursor || "1", 10) || 1);
   let url = BASE + "/animes";
   let movies = false;
-  if (ref === "emision") url = BASE + "/animes?estado=en+emision";
-  else if (ref === "peliculas") { url = BASE + "/animes?tipo=pelicula"; movies = true; }
-  else if (ref === "animes") url = BASE + "/animes";
+  if (ref === "emision") {
+    // Sin filtro server-side real: primera pagina = recientes de /animes
+    url = BASE + "/animes";
+  } else if (ref === "peliculas") {
+    url = BASE + "/animes?categoria=pelicula";
+    movies = true;
+  } else if (ref === "animes") {
+    url = BASE + "/animes";
+  }
   if (pageNum > 1) url += (url.indexOf("?") >= 0 ? "&" : "?") + "page=" + pageNum;
   const page = await getPage(url);
   const items = cardsFrom(page.html, { movies: movies });
