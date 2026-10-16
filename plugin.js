@@ -141,7 +141,18 @@ function cleanTitle(raw) {
 function cleanImg(u) {
   u = abs(u);
   if (!u) return "";
-  return u.replace(/\?v=\d+/g, "").replace(/\?t=[^&]+/g, "");
+  u = u.replace(/\?v=\d+/g, "").replace(/\?t=[^&]+/g, "");
+  // thumbs/*.jpg.webp -> img/serie/*/NAME.jpg (JPEG estable que Kino carga bien)
+  let m = /\/assets\/thumbs\/imagen\/([^/?#]+?)(?:\.jpg)?(?:\.webp)?$/i.exec(u);
+  if (m) return BASE + "/assets/img/serie/imagen/" + m[1].replace(/\.jpg$/i, "") + ".jpg";
+  m = /\/assets\/thumbs\/portada\/([^/?#]+?)(?:\.jpg)?(?:\.webp)?$/i.exec(u);
+  if (m) {
+    const name = m[1].replace(/\.jpg$/i, "");
+    return BASE + "/assets/img/serie/portada/" + name + ".jpg";
+  }
+  // ya es img/serie pero con .webp
+  u = u.replace(/\.jpg\.webp$/i, ".jpg").replace(/\.webp$/i, ".jpg");
+  return u;
 }
 function posterToBackdrop(poster) {
   const u = String(poster || "");
@@ -359,7 +370,7 @@ export async function home() {
     const idx = homeHtml.indexOf("Series recientes");
     if (idx >= 0) slice = homeHtml.slice(idx, idx + 60000);
     const items = cardsAnime(slice);
-    kino.log("home recientes: " + items.length);
+    kino.log("home recientes: " + items.length + (items[0] && items[0].poster ? " poster0=" + items[0].poster.slice(0, 60) : " sin poster"));
     if (items.length) rows.push({ id: "recientes", title: "Series recientes", items: items.slice(0, 24) });
   } catch (e) {
     kino.log("home recientes: " + ((e && e.message) || e));
@@ -644,10 +655,14 @@ function jsUnpack(source) {
   }
 }
 function unpackAll(html) {
-  let out = "";
-  const re = /eval\s*\(\s*function\s*\(\s*p\s*,\s*a\s*,\s*c\s*,\s*k\s*,\s*e\s*,\s*[rd]\s*\)[\s\S]*?\)\s*\)/g;
+  const src = String(html || "");
+  // Buscar el packer en toda la pagina (el eval(...) no-greedy se corta antes de tiempo)
+  let out = jsUnpack(src);
+  if (out) return out;
+  // Fallback: bloques eval
+  const re = /eval\s*\(\s*function\s*\(\s*p\s*,\s*a\s*,\s*c\s*,\s*k\s*,\s*e\s*,\s*[rd][\s\S]{0,8000}?\.split\s*\(\s*'\|'\s*\)[\s\S]{0,40}?\)/g;
   let x;
-  while ((x = re.exec(String(html || "")))) {
+  while ((x = re.exec(src))) {
     const u = jsUnpack(x[0]);
     if (u) out += "\n" + u;
   }
@@ -695,11 +710,11 @@ async function packerStream(embed, label) {
     throw fail("unavailable", "Filemoon protegido (SPA); prueba MixDrop o Mp4Upload", "serverFailed");
   }
   const unpacked = unpackAll(html);
-  let file = findStreamUrl(html);
-  if (!file) file = findStreamUrl(unpacked);
-  // Lulu/JW: sources:[{file:"https://...m3u8"}]
+  kino.log(label + " html=" + html.length + " unpacked=" + (unpacked ? unpacked.length : 0));
+  let file = findStreamUrl(unpacked);
+  if (!file) file = findStreamUrl(html);
   if (!file) {
-    const sm = /file\s*:\s*["']((?:https?:)?\/\/[^"']+)["']/i.exec(html + "\n" + unpacked);
+    const sm = /file\s*:\s*["']((?:https?:)?\/\/[^"']+)["']/i.exec((unpacked || "") + "\n" + html);
     if (sm) file = sm[1];
   }
   if (!file) throw fail("unavailable", goneIn(html) ? label + " borrado" : label + " sin video", "serverFailed");
