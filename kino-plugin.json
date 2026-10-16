@@ -1,10 +1,10 @@
 {
   "id": "monoschinos",
   "name": "MonosChinos",
-  "version": "2.5.0",
+  "version": "3.1.0",
   "apiVersion": 6,
   "entry": "plugin.js",
-  "description": "Anime subtitulado de monoschinos.st con portadas, fondos y capitulos del sitio.",
+  "description": "Anime subtitulado de monoschinos.st. En emision, animes y peliculas.",
   "author": "tu-usuario-de-github",
   "hosts": [
     "monoschinos.st",
@@ -12,34 +12,44 @@
     "mixdrop.top",
     "mixdrop.co",
     "mixdrop.ag",
-    "voe.sx",
-    "jilliandescribecompany.com",
+    "mixdrop.sb",
+    "mxdrop.click",
+    "mxdrop.to",
+    "mxcontent.net",
     "www.mp4upload.com",
     "mp4upload.com",
+    "a3.mp4upload.com",
+    "www1.mp4upload.com",
     "luluvdo.com",
     "lulustream.com",
+    "tnmr.org",
+    "lulucdn.com",
+    "voe.sx",
+    "jilliandescribecompany.com",
+    "andreagrabinduce.com",
     "savefiles.com",
     "streamhls.to",
+    "streamhls.com",
     "dsvplay.com",
     "dood.watch",
     "doodstream.com",
+    "dood.la",
+    "dood.ws",
+    "dood.pm",
     "bysekoze.com",
     "filemoon.to",
     "filemoon.sx",
+    "filemoon.eu",
     "hexload.com",
     "uqload.com",
     "uqload.co",
     "streamwish.to",
     "streamwish.com",
+    "ahvsh.com",
     "vidhide.com",
     "vidhidepro.com",
     "hqq.tv",
-    "waaw.tv",
-    "mxcontent.net",
-    "*.mxcontent.net",
-    "tnmr.org",
-    "*.tnmr.org",
-    "lulucdn.com"
+    "waaw.tv"
   ],
   "streamHosts": "any",
   "capabilities": [
@@ -89,20 +99,8 @@
           "label": "Doodstream"
         },
         {
-          "value": "hexload",
-          "label": "Hexload"
-        },
-        {
           "value": "filemoon",
           "label": "Filemoon"
-        },
-        {
-          "value": "streamwish",
-          "label": "StreamWish"
-        },
-        {
-          "value": "netu",
-          "label": "Netu"
         }
       ]
     }

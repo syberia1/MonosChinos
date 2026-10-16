@@ -1,5 +1,5 @@
-// MonosChinos para Kino (apiVersion 6) - https://monoschinos.st
-// Modelo TioAnime: r.text() es metodo. QuickJS sin setTimeout/fetch/URL/atob.
+// MonosChinos Kino plugin 3.1.0 - https://monoschinos.st
+// Modelo TioAnime: r.text() metodo, kino.html.select, hosts de redirects.
 
 const BASE = "https://monoschinos.st";
 const UA =
@@ -9,19 +9,10 @@ const ID_OK = /^[A-Za-z0-9._~-]{1,128}$/;
 const TXT = {
   notFound: { es: "No encontramos esto en el sitio.", en: "We could not find this on the site." },
   siteDown: { es: "El sitio no responde ahora. Intenta mas tarde.", en: "The site is not answering now. Try again later." },
-  noServers: {
-    es: "Este capitulo no tiene servidores reproducibles.",
-    en: "This episode has no playable servers.",
-  },
-  serverFailed: {
-    es: "No se pudo abrir el video. Prueba otro en el menu Servidor.",
-    en: "Could not open the video. Try another one in the Servidor menu.",
-  },
+  noServers: { es: "Este capitulo no tiene servidores reproducibles.", en: "This episode has no playable servers." },
+  serverFailed: { es: "No se pudo abrir el video. Prueba otro en el menu Servidor.", en: "Could not open the video. Try another one in the Servidor menu." },
   badRef: { es: "Este titulo ya no es valido. Buscalo otra vez.", en: "This title is no longer valid. Search again." },
-  noEpisodes: {
-    es: "MonosChinos no pudo cargar los capitulos.",
-    en: "MonosChinos could not load the episodes.",
-  },
+  noEpisodes: { es: "MonosChinos no pudo cargar los capitulos.", en: "MonosChinos could not load the episodes." },
   episode: { es: "Capitulo ", en: "Episode " },
 };
 
@@ -36,23 +27,21 @@ function fail(code, detail, key) {
 }
 function reasonOf(e) {
   const m = String((e && e.message) || "");
-  if (/borrad|deleted|not found|removed|HTTP 404/i.test(m)) return lang() === "en" ? "video removed" : "video borrado";
+  if (/borrad|deleted|not found|removed|HTTP 404/i.test(m)) return "video borrado";
   const h = /HTTP (\d{3})/.exec(m);
   if (h) return "HTTP " + h[1];
-  if (/tiempo agotado|timeout|took too long/i.test(m)) return lang() === "en" ? "timed out" : "tardo demasiado";
-  if (/sin video/i.test(m)) return lang() === "en" ? "no video found" : "sin video";
-  if (/SPA|protegido/i.test(m)) return m.slice(0, 80);
-  return lang() === "en" ? "failed" : "fallo";
+  if (/timeout|tardo|took too long/i.test(m)) return "tardo demasiado";
+  if (/sin video/i.test(m)) return "sin video";
+  if (/SPA|protegido|bloqueado/i.test(m)) return m.slice(0, 80);
+  if (/network|Unable to resolve/i.test(m)) return "sin conexion";
+  return "fallo";
 }
 
-// Cuerpo de kino.fetch: en Kino r.text es METODO (como TioAnime: r.text()).
 function bodyText(r) {
   if (!r) return "";
   try {
     if (typeof r.text === "function") return String(r.text() || "");
-  } catch (e) {
-    /* ignore */
-  }
+  } catch (e) {}
   if (typeof r.text === "string") return r.text;
   return "";
 }
@@ -79,9 +68,8 @@ function utf8(bytes) {
     const c = bytes[i++];
     if (c < 128) s += String.fromCharCode(c);
     else if (c < 224) s += String.fromCharCode(((c & 31) << 6) | (bytes[i++] & 63));
-    else if (c < 240) {
-      s += String.fromCharCode(((c & 15) << 12) | ((bytes[i++] & 63) << 6) | (bytes[i++] & 63));
-    } else {
+    else if (c < 240) s += String.fromCharCode(((c & 15) << 12) | ((bytes[i++] & 63) << 6) | (bytes[i++] & 63));
+    else {
       const cp = ((c & 7) << 18) | ((bytes[i++] & 63) << 12) | ((bytes[i++] & 63) << 6) | (bytes[i++] & 63);
       const v = cp - 0x10000;
       s += String.fromCharCode(0xd800 + (v >> 10), 0xdc00 + (v & 1023));
@@ -90,11 +78,7 @@ function utf8(bytes) {
   return s;
 }
 function b64text(s) {
-  try {
-    return utf8(b64bytes(s));
-  } catch (e) {
-    return "";
-  }
+  try { return utf8(b64bytes(s)); } catch (e) { return ""; }
 }
 function unslash(s) {
   return String(s).replace(/\\(.)/g, "$1");
@@ -113,63 +97,41 @@ function originOf(u) {
 }
 function decodeHtml(s) {
   return String(s || "")
-    .replace(/&amp;/g, "&")
-    .replace(/&quot;/g, '"')
-    .replace(/&#039;/g, "'")
-    .replace(/&apos;/g, "'")
-    .replace(/&#x27;/gi, "'")
-    .replace(/&lt;/g, "<")
-    .replace(/&gt;/g, ">")
-    .replace(/&#(\d+);/g, function (_m, n) {
-      return String.fromCharCode(parseInt(n, 10));
-    })
+    .replace(/&amp;/g, "&").replace(/&quot;/g, '"').replace(/&#039;/g, "'")
+    .replace(/&apos;/g, "'").replace(/&#x27;/gi, "'")
+    .replace(/&lt;/g, "<").replace(/&gt;/g, ">")
+    .replace(/&#(\d+);/g, function (_m, n) { return String.fromCharCode(parseInt(n, 10)); })
     .replace(/&nbsp;/g, " ");
 }
-function attrOf(chunk, name) {
-  const dq = new RegExp("\\b" + name + "\\s*=\\s*\"([^\"]*)\"", "i").exec(chunk);
-  if (dq) return decodeHtml(dq[1]);
-  const sq = new RegExp("\\b" + name + "\\s*=\\s*'([^']*)'", "i").exec(chunk);
-  return sq ? decodeHtml(sq[1]) : "";
-}
-function cleanTitle(raw) {
-  return decodeHtml(String(raw || ""))
-    .replace(/\s+capitulo\s+\d+$/i, "")
-    .replace(/\s+episodio\s+\d+$/i, "")
-    .replace(/\s+/g, " ")
-    .trim();
-}
+
+// Thumbs .jpg.webp -> JPEG estable del CDN del sitio
 function cleanImg(u) {
   u = abs(u);
-  if (!u) return "";
-  u = u.replace(/\?v=\d+/g, "").replace(/\?t=[^&]+/g, "");
-  // thumbs/*.jpg.webp -> img/serie/*/NAME.jpg (JPEG estable que Kino carga bien)
+  if (!u || /anime\.png|capblank/i.test(u)) return "";
+  u = u.replace(/\?v=\d+/g, "").replace(/\?t=[^&]+/g, "").replace(/#.*$/, "");
   let m = /\/assets\/thumbs\/imagen\/([^/?#]+?)(?:\.jpg)?(?:\.webp)?$/i.exec(u);
   if (m) return BASE + "/assets/img/serie/imagen/" + m[1].replace(/\.jpg$/i, "") + ".jpg";
   m = /\/assets\/thumbs\/portada\/([^/?#]+?)(?:\.jpg)?(?:\.webp)?$/i.exec(u);
-  if (m) {
-    const name = m[1].replace(/\.jpg$/i, "");
-    return BASE + "/assets/img/serie/portada/" + name + ".jpg";
-  }
-  // ya es img/serie pero con .webp
+  if (m) return BASE + "/assets/img/serie/portada/" + m[1].replace(/\.jpg$/i, "") + ".jpg";
   u = u.replace(/\.jpg\.webp$/i, ".jpg").replace(/\.webp$/i, ".jpg");
   return u;
 }
 function posterToBackdrop(poster) {
   const u = String(poster || "");
-  const m = /\/assets\/(?:img\/serie|thumbs)\/imagen\/([^\/?#]+?)-(\d+)\.(?:jpg|jpeg|png|webp)/i.exec(u);
+  const m = /\/assets\/img\/serie\/imagen\/([^/?#]+?)-(\d+)\.jpg/i.exec(u);
   if (m) {
     const name = m[1].replace(/-T\d+$/i, "");
     return BASE + "/assets/img/serie/portada/" + name + "-portada-" + m[2] + ".jpg";
   }
-  const p = /\/assets\/thumbs\/portada\/([^\/?#]+)/i.exec(u);
-  if (p) {
-    const name = p[1].replace(/\.webp$/i, "").replace(/\.jpg$/i, "");
-    return BASE + "/assets/img/serie/portada/" + name + ".jpg";
+  const m2 = /\/assets\/img\/serie\/imagen\/([^/?#]+)\.jpg/i.exec(u);
+  if (m2) {
+    const base = m2[1].replace(/-T\d+$/i, "");
+    const idm = /-(\d+)$/.exec(base);
+    if (idm) return BASE + "/assets/img/serie/portada/" + base.replace(/-\d+$/, "") + "-portada-" + idm[1] + ".jpg";
   }
   return "";
 }
 
-// Igual que TioAnime: reintento ante 429/5xx y r.text()
 async function getPage(url, headers, timeoutMs) {
   const opts = {
     headers: Object.assign(
@@ -202,101 +164,80 @@ async function getPage(url, headers, timeoutMs) {
 
 function mkItem(slug, title, poster, movie) {
   if (!slug || !ID_OK.test(slug)) return null;
+  // Quitar sufijo -sub-espanol del id visible si hace ruido, pero mantener slug real en ref
   const item = {
     id: slug,
     kind: movie ? "movie" : "series",
-    title: String(title || slug.replace(/-/g, " ")).slice(0, 200),
+    title: String(title || slug.replace(/-sub-espanol$/i, "").replace(/-/g, " ")).slice(0, 200),
     ref: "a:" + slug,
   };
   if (poster) item.poster = poster;
   return item;
 }
 
-function cardsAnime(html) {
-  const src = String(html || "");
-  const items = [];
-  const seen = {};
-  const re = /\/anime\/([A-Za-z0-9._~-]+)/g;
-  let x;
-  while ((x = re.exec(src))) {
-    const slug = x[1];
-    if (!slug || seen[slug]) continue;
-    const from = x.index > 120 ? x.index - 120 : 0;
-    const chunk = src.slice(from, x.index + 1600);
-    let poster = attrOf(chunk, "data-src");
-    if (!poster || /anime\.png|capblank/i.test(poster)) {
-      const s = attrOf(chunk, "src");
-      if (s && /assets\/(thumbs|img)/i.test(s) && !/anime\.png/i.test(s)) poster = s;
-      else poster = "";
-    }
-    poster = cleanImg(poster);
-    let title = cleanTitle(attrOf(chunk, "alt"));
-    if (!title) {
-      const h3 = /<h3[^>]*>([^<]{2,220})/i.exec(chunk);
-      if (h3) title = cleanTitle(h3[1]);
-    }
-    if (!title) title = slug.replace(/-/g, " ");
-    // Si no hay poster ni titulo decente y el enlace es del footer, saltar
-    if (!poster && title === slug.replace(/-/g, " ")) continue;
-    seen[slug] = true;
-    const item = mkItem(slug, title, poster, false);
-    if (item) items.push(item);
+// Como TioAnime: kino.html.select sobre <article>
+function cardsFrom(html, opts) {
+  opts = opts || {};
+  let boxes = [];
+  try {
+    boxes = kino.html.select(html, "article").map(function (a) { return a.html; });
+  } catch (e) {
+    boxes = [];
   }
-  return items;
-}
-
-function cardsEpisodes(html) {
-  const full = String(html || "");
-  // Preferir el bloque "Ultimos capitulos" para no mezclar con el hero
-  let src = full;
-  const a = full.search(/[UÚ]ltimos cap[ií]tulos/i);
-  const b = full.indexOf("Series recientes");
-  if (a >= 0) src = full.slice(a, b > a ? b : a + 80000);
-
+  if (!boxes.length) {
+    // Fallback regex por si select falla
+    const re = /<article[\s\S]*?<\/article>/gi;
+    let m;
+    while ((m = re.exec(String(html || "")))) boxes.push(m[0]);
+  }
   const items = [];
   const seen = {};
-  const re = /\/ver\/([A-Za-z0-9._~-]+)-episodio-(\d+)/g;
-  let x;
-  while ((x = re.exec(src))) {
-    const slug = x[1];
-    if (!slug || seen[slug]) continue;
-    const from = x.index > 200 ? x.index - 200 : 0;
-    const chunk = src.slice(from, x.index + 1800);
+  for (let i = 0; i < boxes.length; i++) {
+    const box = boxes[i];
+    let href = "";
     let title = "";
-    const h3 = /<h3[^>]*>([^<]{2,220})/i.exec(chunk);
-    if (h3) title = cleanTitle(h3[1]);
-    if (!title) title = cleanTitle(attrOf(chunk, "alt")).replace(/\s+capitulo\s+\d+$/i, "");
-    // Si no hay titulo real (solo el slug), saltar: suele ser un enlace del hero
-    if (!title || title === slug.replace(/-/g, " ")) continue;
+    let src = "";
+    try {
+      const links = kino.html.select(box, "a[href]");
+      if (links && links[0] && links[0].attrs) href = links[0].attrs.href || "";
+      const h3s = kino.html.select(box, "h3");
+      if (h3s && h3s[0]) title = (h3s[0].text || "").replace(/\s+/g, " ").trim();
+      const imgs = kino.html.select(box, "img");
+      if (imgs && imgs[0] && imgs[0].attrs) {
+        src = imgs[0].attrs["data-src"] || imgs[0].attrs.src || "";
+        if (!title && imgs[0].attrs.alt) title = String(imgs[0].attrs.alt).trim();
+      }
+    } catch (e) {
+      // regex fallback
+      const hm = /href=["']([^"']*\/anime\/[^"']+)["']/i.exec(box);
+      if (hm) href = hm[1];
+      const h3 = /<h3[^>]*>([^<]+)/i.exec(box);
+      if (h3) title = decodeHtml(h3[1]).replace(/\s+/g, " ").trim();
+      const ds = /data-src=["']([^"']+)["']/i.exec(box);
+      if (ds) src = ds[1];
+    }
+    if (!href) {
+      const hm = /href=["']([^"']*\/anime\/[^"']+)["']/i.exec(box);
+      if (hm) href = hm[1];
+    }
+    const sm = /\/anime\/([A-Za-z0-9._~-]+)/.exec(href);
+    if (!sm) continue;
+    const slug = sm[1];
+    if (seen[slug]) continue;
     seen[slug] = true;
-    let poster = cleanImg(attrOf(chunk, "data-src") || attrOf(chunk, "src"));
-    if (/capblank|anime\.png/i.test(poster)) poster = "";
-    // Convertir miniatura de capitulo a poster vertical del anime si se puede
-    const bd = posterToBackdrop(poster);
-    if (bd) {
-      // portada horizontal esta bien como poster de fila de capitulos
+    if (!title) {
+      const h3 = /<h3[^>]*>([^<]+)/i.exec(box);
+      if (h3) title = decodeHtml(h3[1]).replace(/\s+/g, " ").trim();
     }
-    const item = mkItem(slug, title, poster, false);
+    if (!title) title = slug.replace(/-sub-espanol$/i, "").replace(/-/g, " ");
+    if (!src) {
+      const ds = /data-src=["']([^"']+)["']/i.exec(box);
+      if (ds) src = ds[1];
+    }
+    const poster = cleanImg(src);
+    const movie = !!opts.movies || /pelicula|movie/i.test(box) || /tipo=pelicula/i.test(href);
+    const item = mkItem(slug, title, poster, movie);
     if (item) items.push(item);
-  }
-  // Fallback: si el bloque no dio nada, escanear todo (aceptando slug)
-  if (!items.length) {
-    const re2 = /\/ver\/([A-Za-z0-9._~-]+)-episodio-(\d+)/g;
-    let y;
-    while ((y = re2.exec(full))) {
-      const slug = y[1];
-      if (!slug || seen[slug]) continue;
-      seen[slug] = true;
-      const from = y.index > 200 ? y.index - 200 : 0;
-      const chunk = full.slice(from, y.index + 1800);
-      let title = cleanTitle(((/<h3[^>]*>([^<]{2,220})/i.exec(chunk) || [])[1] || ""));
-      if (!title) title = cleanTitle(attrOf(chunk, "alt"));
-      if (!title) title = slug.replace(/-/g, " ");
-      let poster = cleanImg(attrOf(chunk, "data-src") || attrOf(chunk, "src"));
-      if (/capblank|anime\.png/i.test(poster)) poster = "";
-      const item = mkItem(slug, title, poster, false);
-      if (item) items.push(item);
-    }
   }
   return items;
 }
@@ -310,79 +251,45 @@ export async function search(query) {
   if (q.length < 2) return [];
   try {
     const page = await getPage(BASE + "/buscar?q=" + encodeURIComponent(q));
-    const items = cardsAnime(page.html);
+    const items = cardsFrom(page.html);
     if (items.length) return items.slice(0, 40);
   } catch (e) {
-    kino.log("search page: " + ((e && e.message) || e));
+    kino.log("search: " + ((e && e.message) || e));
   }
-  try {
-    const r = await kino.fetch(BASE + "/buscar_ajax?q=" + encodeURIComponent(q), {
-      headers: { "User-Agent": UA, "X-Requested-With": "XMLHttpRequest", Accept: "application/json" },
-      timeoutMs: 10000,
-    });
-    if (!r || !r.ok) return [];
-    const text = bodyText(r).trim();
-    if (!text || text.charAt(0) !== "[") {
-      kino.log("search ajax: not JSON len=" + text.length);
-      return [];
-    }
-    const data = JSON.parse(text);
-    const seen = {};
-    const items = [];
-    for (let i = 0; i < data.length; i++) {
-      const row = data[i] || {};
-      const um = /\/anime\/([A-Za-z0-9._~-]+)/.exec(String(row.url || ""));
-      const slug = um ? um[1] : "";
-      if (!slug || seen[slug]) continue;
-      seen[slug] = true;
-      const item = mkItem(slug, row.nombre || slug, row.thumb ? cleanImg(row.thumb) : "", false);
-      if (item) items.push(item);
-    }
-    return items.slice(0, 40);
-  } catch (e) {
-    kino.log("search ajax: " + ((e && e.message) || e));
-    return [];
-  }
+  return [];
 }
 
 export async function home() {
   const rows = [];
-  let homeHtml = "";
-  try {
-    const page = await getPage(BASE + "/");
-    homeHtml = page.html;
-    kino.log("home: html=" + homeHtml.length);
-  } catch (e) {
-    kino.log("home fetch: " + ((e && e.message) || e));
-    return rows;
-  }
 
-  try {
-    const items = cardsEpisodes(homeHtml);
-    kino.log("home ultimos: " + items.length);
-    if (items.length) rows.push({ id: "ultimos", title: "Ultimos capitulos", items: items.slice(0, 24) });
-  } catch (e) {
-    kino.log("home ultimos: " + ((e && e.message) || e));
-  }
-
-  try {
-    let slice = homeHtml;
-    const idx = homeHtml.indexOf("Series recientes");
-    if (idx >= 0) slice = homeHtml.slice(idx, idx + 60000);
-    const items = cardsAnime(slice);
-    kino.log("home recientes: " + items.length + (items[0] && items[0].poster ? " poster0=" + items[0].poster.slice(0, 60) : " sin poster"));
-    if (items.length) rows.push({ id: "recientes", title: "Series recientes", items: items.slice(0, 24) });
-  } catch (e) {
-    kino.log("home recientes: " + ((e && e.message) || e));
-  }
-
+  // 1) En emision
   try {
     const page = await getPage(BASE + "/animes?estado=en+emision");
-    const items = cardsAnime(page.html);
-    kino.log("home emision: " + items.length);
+    const items = cardsFrom(page.html);
+    kino.log("home emision: " + items.length + (items[0] && items[0].poster ? " p=" + items[0].poster.slice(-40) : ""));
     if (items.length) rows.push({ id: "emision", title: "En emision", items: items.slice(0, 24) });
   } catch (e) {
     kino.log("home emision: " + ((e && e.message) || e));
+  }
+
+  // 2) Animes (listado general)
+  try {
+    const page = await getPage(BASE + "/animes");
+    const items = cardsFrom(page.html);
+    kino.log("home animes: " + items.length + (items[0] && items[0].poster ? " p=" + items[0].poster.slice(-40) : ""));
+    if (items.length) rows.push({ id: "animes", title: "Animes", items: items.slice(0, 24) });
+  } catch (e) {
+    kino.log("home animes: " + ((e && e.message) || e));
+  }
+
+  // 3) Peliculas
+  try {
+    const page = await getPage(BASE + "/animes?tipo=pelicula");
+    const items = cardsFrom(page.html, { movies: true });
+    kino.log("home peliculas: " + items.length + (items[0] && items[0].poster ? " p=" + items[0].poster.slice(-40) : ""));
+    if (items.length) rows.push({ id: "peliculas", title: "Peliculas", items: items.slice(0, 24) });
+  } catch (e) {
+    kino.log("home peliculas: " + ((e && e.message) || e));
   }
 
   return rows;
@@ -391,11 +298,13 @@ export async function home() {
 export async function browse(ref, cursor) {
   const pageNum = Math.max(1, parseInt(cursor || "1", 10) || 1);
   let url = BASE + "/animes";
+  let movies = false;
   if (ref === "emision") url = BASE + "/animes?estado=en+emision";
-  else if (ref === "peliculas") url = BASE + "/animes?tipo=pelicula";
+  else if (ref === "peliculas") { url = BASE + "/animes?tipo=pelicula"; movies = true; }
+  else if (ref === "animes") url = BASE + "/animes";
   if (pageNum > 1) url += (url.indexOf("?") >= 0 ? "&" : "?") + "page=" + pageNum;
   const page = await getPage(url);
-  const items = cardsAnime(page.html);
+  const items = cardsFrom(page.html, { movies: movies });
   const next = hasNextPage(page.html, pageNum) || items.length >= 20 ? String(pageNum + 1) : null;
   return { items: items, next: next };
 }
@@ -420,46 +329,39 @@ async function fetchJson(url) {
 
 function parseSeriesHtml(html, slug) {
   const series = { title: "", poster: "", backdrop: "", overview: "" };
-  const src = String(html || "");
-
-  const h1m = /<h1[^>]*>([\s\S]*?)<\/h1>/i.exec(src);
-  if (h1m) series.title = decodeHtml(h1m[1].replace(/<[^>]+>/g, "")).replace(/\s+/g, " ").trim();
+  try {
+    const h1 = kino.html.select(html, "h1")[0];
+    if (h1 && h1.text) series.title = String(h1.text).replace(/\s+/g, " ").trim();
+  } catch (e) {}
   if (!series.title) {
-    const ogt = /property=["']og:title["'][^>]*content=["']([^"']+)["']/i.exec(src);
-    if (ogt) {
-      series.title = decodeHtml(ogt[1])
-        .replace(/\s*Sub Espa.ol.*$/i, "")
-        .replace(/\s*Online.*$/i, "")
-        .replace(/\s*-\s*MonosChinos.*$/i, "")
-        .trim();
-    }
+    const h1m = /<h1[^>]*>([\s\S]*?)<\/h1>/i.exec(html);
+    if (h1m) series.title = decodeHtml(h1m[1].replace(/<[^>]+>/g, "")).replace(/\s+/g, " ").trim();
   }
-  if (!series.title) series.title = slug.replace(/-/g, " ");
+  if (!series.title) series.title = slug.replace(/-sub-espanol$/i, "").replace(/-/g, " ");
 
-  const ogi = /property=["']og:image["'][^>]*content=["']([^"']+)["']/i.exec(src);
-  if (ogi) series.poster = cleanImg(ogi[1]);
+  let og = "";
+  try {
+    const meta = kino.html.select(html, "meta[property=og:image]")[0];
+    if (meta && meta.attrs && meta.attrs.content) og = meta.attrs.content;
+  } catch (e) {}
+  if (!og) {
+    const ogi = /property=["']og:image["'][^>]*content=["']([^"']+)["']/i.exec(html)
+      || /content=["']([^"']+)["'][^>]*property=["']og:image["']/i.exec(html);
+    if (ogi) og = ogi[1];
+  }
+  series.poster = cleanImg(og) || cleanImg(og);
   if (!series.poster) {
-    const ds = /data-src=["']([^"']*\/assets\/thumbs\/imagen\/[^"']+)["']/i.exec(src);
+    const ds = /data-src=["']([^"']*\/assets\/(?:img|thumbs)\/[^"']+)["']/i.exec(html);
     if (ds) series.poster = cleanImg(ds[1]);
   }
+  series.backdrop = posterToBackdrop(series.poster) || series.poster || "";
 
-  const bd = posterToBackdrop(series.poster);
-  series.backdrop = bd || series.poster || "";
-
-  const sin =
-    /Sinopsis[\s\S]{0,200}<p[^>]*>([^<]{20,1200})<\/p>/i.exec(src) ||
-    /Sobre la serie[\s\S]{0,200}<p[^>]*>([^<]{20,1200})<\/p>/i.exec(src);
-  if (sin) {
-    series.overview = decodeHtml(sin[1]).replace(/\s+/g, " ").trim().slice(0, 2000);
-  } else {
-    const ogd =
-      /property=["']og:description["'][^>]*content=["']([^"']+)["']/i.exec(src) ||
-      /name=["']description["'][^>]*content=["']([^"']+)["']/i.exec(src);
+  const sin = /Sinopsis[\s\S]{0,300}<p[^>]*>([^<]{20,1500})<\/p>/i.exec(html);
+  if (sin) series.overview = decodeHtml(sin[1]).replace(/\s+/g, " ").trim().slice(0, 2000);
+  else {
+    const ogd = /property=["']og:description["'][^>]*content=["']([^"']+)["']/i.exec(html);
     if (ogd) {
-      let text = decodeHtml(ogd[1]);
-      const parts = text.split(/\.\s+/);
-      if (parts.length >= 2) text = parts.slice(1).join(". ").trim();
-      text = text.replace(/^Ver[\s\S]*?MonosChinos\.?\s*/i, "").replace(/\s+/g, " ").trim();
+      let text = decodeHtml(ogd[1]).replace(/^Ver[\s\S]*?MonosChinos\.?\s*/i, "").replace(/\s+/g, " ").trim();
       if (text.length >= 40) series.overview = text.slice(0, 2000);
     }
   }
@@ -468,9 +370,7 @@ function parseSeriesHtml(html, slug) {
 
 export async function episodes(ref) {
   const T = Date.now();
-  function left() {
-    return 18500 - (Date.now() - T);
-  }
+  function left() { return 18500 - (Date.now() - T); }
   const m = /^a:([A-Za-z0-9._~-]+)$/.exec(String(ref || ""));
   if (!m) throw fail("not_found", "ref invalido", "badRef");
   const slug = m[1];
@@ -480,7 +380,14 @@ export async function episodes(ref) {
     const page = await getPage(BASE + "/anime/" + slug, null, 14000);
     html = page.html;
   } catch (e) {
-    throw fail("unavailable", "ficha: " + ((e && e.message) || e), "siteDown");
+    // Probar con/sin -sub-espanol
+    const alt = /sub-espanol$/i.test(slug) ? slug.replace(/-sub-espanol$/i, "") : slug + "-sub-espanol";
+    try {
+      const page = await getPage(BASE + "/anime/" + alt, null, 12000);
+      html = page.html;
+    } catch (e2) {
+      throw fail("unavailable", "ficha: " + ((e && e.message) || e), "siteDown");
+    }
   }
 
   const series = parseSeriesHtml(html, slug);
@@ -488,7 +395,6 @@ export async function episodes(ref) {
   const ajaxM = /data-ajax=["']([^"']+)["']/i.exec(html);
   if (!ajaxM) throw fail("not_found", "sin data-ajax", "noEpisodes");
   const ajaxUrl = abs(ajaxM[1]);
-  kino.log("episodes ajax=" + ajaxUrl);
 
   let meta;
   try {
@@ -501,13 +407,11 @@ export async function episodes(ref) {
   const perpage = parseInt((meta && meta.perpage) || 50, 10) || 50;
   const paginateUrl = (meta && meta.paginate_url) || "";
   const total = epsMeta.length;
-  kino.log("episodes total=" + total);
 
   const caps = [];
   if (paginateUrl && total > 0) {
-    const pages = Math.max(1, Math.ceil(total / perpage));
-    const maxPages = pages > 10 ? 10 : pages;
-    for (let p = 1; p <= maxPages && left() > 2000; p++) {
+    const pages = Math.min(10, Math.max(1, Math.ceil(total / perpage)));
+    for (let p = 1; p <= pages && left() > 2000; p++) {
       try {
         const join = paginateUrl.indexOf("?") >= 0 ? "&" : "?";
         const data = await fetchJson(paginateUrl + join + "p=" + p);
@@ -527,7 +431,7 @@ export async function episodes(ref) {
       const n = parseInt(c.episodio, 10);
       if (!n || seen[n]) continue;
       seen[n] = true;
-      let epSlug = slug;
+      let epSlug = slug.replace(/-sub-espanol$/i, "");
       const vm = /\/ver\/([A-Za-z0-9._~-]+)-episodio-(\d+)/.exec(String(c.url || ""));
       if (vm) epSlug = vm[1];
       list.push({
@@ -535,7 +439,7 @@ export async function episodes(ref) {
         number: n,
         ref: "e:" + epSlug + ":" + n,
         title: t("episode") + n,
-        still: c.thumb ? cleanImg(c.thumb) : series.poster || "",
+        still: c.thumb ? cleanImg(c.thumb) : (series.poster || ""),
       });
     }
   } else {
@@ -546,7 +450,7 @@ export async function episodes(ref) {
       list.push({
         season: 1,
         number: n,
-        ref: "e:" + slug + ":" + n,
+        ref: "e:" + slug.replace(/-sub-espanol$/i, "") + ":" + n,
         title: t("episode") + n,
         still: series.poster || "",
       });
@@ -554,46 +458,33 @@ export async function episodes(ref) {
   }
 
   if (!list.length) throw fail("not_found", "0 capitulos", "noEpisodes");
-  list.sort(function (a, b) {
-    return a.number - b.number;
-  });
-
-  kino.log("episodes OK " + slug + " -> " + list.length);
+  list.sort(function (a, b) { return a.number - b.number; });
+  kino.log("episodes OK " + slug + " -> " + list.length + " poster=" + (series.poster || "").slice(-40));
   return { series: series, episodes: list };
 }
 
 const KIND_LABEL = {
-  voe: "Voe",
-  filemoon: "Filemoon",
-  streamwish: "StreamWish",
-  dood: "Doodstream",
-  mixdrop: "MixDrop",
-  mp4upload: "Mp4Upload",
-  lulu: "LuluStream",
-  vidhide: "Vidhide",
-  uqload: "Uqload",
-  savefiles: "SaveFiles",
-  hexload: "Hexload",
-  netu: "Netu",
-  generic: "Servidor",
+  voe: "Voe", filemoon: "Filemoon", streamwish: "StreamWish", dood: "Doodstream",
+  mixdrop: "MixDrop", mp4upload: "Mp4Upload", lulu: "LuluStream", vidhide: "Vidhide",
+  uqload: "Uqload", savefiles: "SaveFiles", hexload: "Hexload", netu: "Netu", generic: "Servidor",
 };
 
 function detectKind(name, url) {
   const n = String(name || "");
   const u = String(url || "");
-  if (/mixdrop|mxdrop/i.test(n) || /mixdrop\./i.test(u)) return "mixdrop";
+  if (/mixdrop|mxdrop/i.test(n) || /mixdrop\.|mxdrop\./i.test(u)) return "mixdrop";
   if (/mp4upload/i.test(n) || /mp4upload\./i.test(u)) return "mp4upload";
-  if (/lulu/i.test(n) || /lulu(vdo|stream|vid)?\./i.test(u)) return "lulu";
+  if (/lulu/i.test(n) || /lulu(vdo|stream)/i.test(u)) return "lulu";
   if (/voe/i.test(n) || /voe\./i.test(u)) return "voe";
   if (/uqload/i.test(n) || /uqload\./i.test(u)) return "uqload";
-  if (/vidhide|streamhide/i.test(n) || /vidhide|streamhide/i.test(u)) return "vidhide";
-  if (/savefiles?|streamhls/i.test(n) || /savefiles?\.|streamhls\./i.test(u)) return "savefiles";
-  if (/hexload/i.test(n) || /hexload\./i.test(u)) return "hexload";
-  if (/dood|dsvplay/i.test(n) || /dood|dsvplay\./i.test(u)) return "dood";
-  if (/filemoon|byse/i.test(n) || /filemoon|byse/i.test(u)) return "filemoon";
-  if (/streamwish|\bwish\b/i.test(n) || /streamwish|wish\./i.test(u)) return "streamwish";
-  if (/netu|hqq|waaw/i.test(n) || /hqq\.|waaw\.|netu\./i.test(u)) return "netu";
-  if (/mega/i.test(n) || /mega\.nz/i.test(u)) return "mega";
+  if (/vidhide|streamhide/i.test(n + u)) return "vidhide";
+  if (/savefiles?|streamhls/i.test(n + u)) return "savefiles";
+  if (/hexload/i.test(n + u)) return "hexload";
+  if (/dood|dsvplay/i.test(n + u)) return "dood";
+  if (/filemoon|byse/i.test(n + u)) return "filemoon";
+  if (/streamwish|\bwish\b/i.test(n + u)) return "streamwish";
+  if (/netu|hqq|waaw/i.test(n + u)) return "netu";
+  if (/mega/i.test(n + u)) return "mega";
   return "generic";
 }
 
@@ -613,22 +504,16 @@ function listServers(html) {
     seen[key] = true;
     servers.push({ name: name, url: url, kind: kind });
   }
-  const order = { mixdrop: 1, mp4upload: 2, lulu: 3, voe: 4, savefiles: 5, hexload: 6, uqload: 7, dood: 8, netu: 10, generic: 15, filemoon: 18, streamwish: 19 };
-  servers.sort(function (a, b) {
-    return (order[a.kind] || 15) - (order[b.kind] || 15);
-  });
+  const order = { mixdrop: 1, mp4upload: 2, lulu: 3, voe: 4, savefiles: 5, dood: 8, filemoon: 18, streamwish: 19, generic: 15 };
+  servers.sort(function (a, b) { return (order[a.kind] || 15) - (order[b.kind] || 15); });
   return servers;
 }
 
 function serverLabel(s, all) {
   const base = KIND_LABEL[s.kind] || s.name || "Servidor";
-  let count = 0;
-  let idx = 0;
+  let count = 0, idx = 0;
   for (let i = 0; i < all.length; i++) {
-    if (all[i].kind === s.kind) {
-      count++;
-      if (all[i] === s) idx = count;
-    }
+    if (all[i].kind === s.kind) { count++; if (all[i] === s) idx = count; }
   }
   return count <= 1 ? base : base + " " + idx;
 }
@@ -641,12 +526,10 @@ function jsUnpack(source) {
     if (!m) return "";
     const payload = m[1].replace(/\\'/g, "'").replace(/\\\\/g, "\\");
     const radix = parseInt(m[2], 10);
-    let count = parseInt(m[3], 10);
+    const count = parseInt(m[3], 10);
     const words = m[4].split("|");
     const trie = {};
-    for (let i = 0; i < count; i++) {
-      trie[i.toString(radix)] = words[i] || i.toString(radix);
-    }
+    for (let i = 0; i < count; i++) trie[i.toString(radix)] = words[i] || i.toString(radix);
     return payload.replace(/\b\w+\b/g, function (w) {
       return Object.prototype.hasOwnProperty.call(trie, w) ? trie[w] : w;
     });
@@ -656,71 +539,66 @@ function jsUnpack(source) {
 }
 function unpackAll(html) {
   const src = String(html || "");
-  // Buscar el packer en toda la pagina (el eval(...) no-greedy se corta antes de tiempo)
-  let out = jsUnpack(src);
-  if (out) return out;
-  // Fallback: bloques eval
-  const re = /eval\s*\(\s*function\s*\(\s*p\s*,\s*a\s*,\s*c\s*,\s*k\s*,\s*e\s*,\s*[rd][\s\S]{0,8000}?\.split\s*\(\s*'\|'\s*\)[\s\S]{0,40}?\)/g;
-  let x;
-  while ((x = re.exec(src))) {
-    const u = jsUnpack(x[0]);
-    if (u) out += "\n" + u;
-  }
-  return out;
+  const u = jsUnpack(src);
+  if (u) return u;
+  return "";
 }
+
 function findStreamUrl(html) {
   const src = String(html || "");
-  // MixDrop: MDCore.wurl="//cdn.../file.mp4?..."
   let m = /MDCore\.wurl\s*=\s*["']([^"']+)["']/i.exec(src);
-  if (m && m[1] && /\.(mp4|m3u8)/i.test(m[1])) return unslash(m[1]);
+  if (m && /\.(mp4|m3u8)/i.test(m[1])) return unslash(m[1]);
   m = /\bwurl\s*=\s*["']([^"']+)["']/i.exec(src);
-  if (m && m[1] && /\.(mp4|m3u8)/i.test(m[1])) return unslash(m[1]);
+  if (m && /\.(mp4|m3u8)/i.test(m[1])) return unslash(m[1]);
   const patterns = [
     /https?:\/\/[^"'\s<>]+\.m3u8[^"'\s<>]*/i,
     /https?:\/\/[^"'\s<>]+\.mp4[^"'\s<>]*/i,
-    /\/\/[a-z0-9.-]+\/[^"'\s<>]+\.m3u8[^"'\s<>]*/i,
-    /\/\/[a-z0-9.-]+\/[^"'\s<>]+\.mp4[^"'\s<>]*/i,
-    /["'](https?:\/\/[^"']+\.m3u8[^"']*)["']/i,
-    /["'](https?:\/\/[^"']+\.mp4[^"']*)["']/i,
-    /["'](\/\/[^"']+\.m3u8[^"']*)["']/i,
-    /["'](\/\/[^"']+\.mp4[^"']*)["']/i,
+    /\/\/[a-z0-9.-]+(?::\d+)?\/[^"'\s<>]+\.m3u8[^"'\s<>]*/i,
+    /\/\/[a-z0-9.-]+(?::\d+)?\/[^"'\s<>]+\.mp4[^"'\s<>]*/i,
+    /["']((?:https?:)?\/\/[^"']+\.m3u8[^"']*)["']/i,
+    /["']((?:https?:)?\/\/[^"']+\.mp4[^"']*)["']/i,
     /file\s*:\s*["']((?:https?:)?\/\/[^"']+)["']/i,
-    /src\s*:\s*["']((?:https?:)?\/\/[^"']+\.m3u8[^"']*)["']/i,
+    /src\s*:\s*["']((?:https?:)?\/\/[^"']+\.(?:m3u8|mp4)[^"']*)["']/i,
   ];
   for (let i = 0; i < patterns.length; i++) {
     const mm = patterns[i].exec(src);
     if (mm) return unslash(mm[1] || mm[0]);
   }
+  // mp4upload style: a3.mp4upload.com:183/d/.../video.mp4
+  m = /https?:\/\/[a-z0-9.-]+(?::\d+)?\/d\/[^"'\s<>]+\/video\.mp4/i.exec(src);
+  if (m) return m[0];
   return "";
 }
+
 function streamResult(url, referer, label) {
-  return { url: url, headers: { Referer: referer || BASE + "/", "User-Agent": UA }, alts: [], label: label || "" };
+  return {
+    url: url,
+    headers: { Referer: referer || BASE + "/", "User-Agent": UA },
+    alts: [],
+    label: label || "",
+  };
 }
 function goneIn(html) {
-  return /File Not Found|deleted|not found|removed|no (longer|existe)|expirad/i.test(String(html || ""));
+  return /File Not Found|deleted|not found|removed|no (longer|existe)|expirad|File was deleted/i.test(String(html || ""));
 }
 
 async function packerStream(embed, label) {
-  const page = await getPage(embed, { Referer: BASE + "/" });
+  const page = await getPage(embed, { Referer: BASE + "/" }, 14000);
   const html = page.html;
-  if (/just a moment|cf-browser-verification|File was deleted/i.test(html) && html.length < 12000) {
-    throw fail("unavailable", label + (goneIn(html) ? " borrado" : " bloqueado"), "serverFailed");
+  kino.log(label + " len=" + html.length + " host=" + originOf(page.url));
+  if (html.length < 500 && /just a moment|cf-browser|challenge/i.test(html)) {
+    throw fail("unavailable", label + " bloqueado CF", "serverFailed");
   }
   if (/filemoon|byse/i.test(label) && /type=["']module["']/.test(html) && !/\.m3u8/i.test(html) && !/MDCore/i.test(html)) {
-    throw fail("unavailable", "Filemoon protegido (SPA); prueba MixDrop o Mp4Upload", "serverFailed");
+    throw fail("unavailable", "Filemoon protegido (SPA)", "serverFailed");
   }
   const unpacked = unpackAll(html);
-  kino.log(label + " html=" + html.length + " unpacked=" + (unpacked ? unpacked.length : 0));
-  let file = findStreamUrl(unpacked);
-  if (!file) file = findStreamUrl(html);
-  if (!file) {
-    const sm = /file\s*:\s*["']((?:https?:)?\/\/[^"']+)["']/i.exec((unpacked || "") + "\n" + html);
-    if (sm) file = sm[1];
-  }
+  let file = findStreamUrl(unpacked) || findStreamUrl(html);
   if (!file) throw fail("unavailable", goneIn(html) ? label + " borrado" : label + " sin video", "serverFailed");
   file = String(file).replace(/\\/g, "");
   if (file.indexOf("//") === 0) file = "https:" + file;
   if (!/^https?:\/\//i.test(file)) throw fail("unavailable", label + " URL invalida", "serverFailed");
+  kino.log(label + " OK " + file.slice(0, 60));
   return streamResult(file, originOf(page.url) + "/", label);
 }
 
@@ -735,104 +613,142 @@ async function doodStream(embed) {
   const m = /\/pass_md5\/([^"'\s]+)/.exec(page.html);
   if (!m) throw fail("unavailable", goneIn(page.html) ? "Dood borrado" : "Dood sin video", "serverFailed");
   const pass = await getPage(originOf(page.url) + "/pass_md5/" + m[1], { Referer: page.url });
-  const token = bodyText({ text: pass.html }) || String(pass.html || "").trim();
-  // pass.html already string from getPage
   const tok = String(pass.html || "").trim();
   if (!tok || tok.length > 500) throw fail("unavailable", "Dood sin token", "serverFailed");
   const parts = m[1].split("/");
   const file = tok + randomAlpha(10) + "?token=" + (parts[parts.length - 1] || "") + "&expiry=" + Date.now();
-  return streamResult(file.indexOf("http") === 0 ? file : originOf(page.url) + file, originOf(page.url) + "/", "Doodstream");
+  const full = file.indexOf("http") === 0 ? file : originOf(page.url) + file;
+  return streamResult(full, originOf(page.url) + "/", "Doodstream");
 }
 
 async function streamFor(s) {
   switch (s.kind) {
-    case "voe":
-      return packerStream(s.url, "Voe");
-    case "dood":
-      return doodStream(s.url);
-    case "mixdrop":
-      return packerStream(String(s.url).replace("/f/", "/e/"), "MixDrop");
-    case "mp4upload":
-      return packerStream(s.url, "Mp4Upload");
-    case "uqload":
-      return packerStream(s.url, "Uqload");
+    case "dood": return doodStream(s.url);
+    case "mixdrop": return packerStream(String(s.url).replace("/f/", "/e/"), "MixDrop");
+    case "mp4upload": return packerStream(s.url, "Mp4Upload");
+    case "voe": return packerStream(s.url, "Voe");
     case "lulu":
     case "vidhide":
     case "savefiles":
     case "hexload":
     case "filemoon":
     case "streamwish":
-      return packerStream(s.url, KIND_LABEL[s.kind] || s.name);
+    case "uqload":
     case "netu":
-      return packerStream(s.url, "Netu");
+      return packerStream(s.url, KIND_LABEL[s.kind] || s.name);
     default:
       return packerStream(s.url, "Servidor");
   }
 }
 
+// ref de episodio: e:slug:num
+// ref de servidor concreto (alternativa diferida): s:idx:e:slug:num
+function parseResolveRef(ref) {
+  let m = /^s:(\d+):e:([A-Za-z0-9._~-]+):(\d+)$/.exec(String(ref || ""));
+  if (m) return { idx: parseInt(m[1], 10), slug: m[2], num: parseInt(m[3], 10) };
+  m = /^e:([A-Za-z0-9._~-]+):(\d+)$/.exec(String(ref || ""));
+  if (m) return { idx: -1, slug: m[1], num: parseInt(m[2], 10) };
+  return null;
+}
+
 export async function resolve(ref) {
   const T = Date.now();
-  function left() {
-    return 18500 - (Date.now() - T);
-  }
-  const m = /^e:([A-Za-z0-9._~-]+):(\d+)$/.exec(String(ref || ""));
-  if (!m) throw fail("not_found", "ref " + ref, "badRef");
-  const slug = m[1];
-  const num = parseInt(m[2], 10);
+  function left() { return 18500 - (Date.now() - T); }
+  const p = parseResolveRef(ref);
+  if (!p) throw fail("not_found", "ref " + ref, "badRef");
 
-  const pageUrl = BASE + "/ver/" + slug + "-episodio-" + num;
-  const page = await getPage(pageUrl, null, 14000);
+  const page = await getPage(BASE + "/ver/" + p.slug + "-episodio-" + p.num, null, 14000);
   let servers = listServers(page.html);
 
   try {
-    const pref = kino.config && kino.config.server;
+    const pref = (kino.config && (kino.config.server || (kino.config.get && kino.config.get("server")))) || "";
     if (pref) {
-      servers.sort(function (a, b) {
+      servers = servers.slice().sort(function (a, b) {
         if (a.kind === pref && b.kind !== pref) return -1;
         if (b.kind === pref && a.kind !== pref) return 1;
         return 0;
       });
     }
-  } catch (e) {
-    /* ignore */
-  }
+  } catch (e) {}
 
-  const names = [];
-  for (let i = 0; i < servers.length; i++) names.push(servers[i].name);
-  kino.log("resolve " + slug + "-" + num + ": " + (names.join(", ") || "ninguno"));
-
+  kino.log(
+    "resolve " + p.slug + "-" + p.num +
+      (p.idx >= 0 ? " server#" + p.idx : "") +
+      ": " + servers.map(function (s) { return s.name; }).join(", ")
+  );
   if (!servers.length) throw fail("not_found", "sin servidores", "noServers");
 
-  const alts = [];
-  const errors = [];
-  let primary = null;
+  // Un server concreto (alternativa del menu / reintento automatico)
+  if (p.idx >= 0) {
+    const s = servers[p.idx];
+    if (!s) throw fail("not_found", "servidor " + p.idx + " no existe", "noServers");
+    const stream = await streamFor(s);
+    return {
+      url: stream.url,
+      headers: stream.headers || { Referer: originOf(s.url) + "/", "User-Agent": UA },
+      label: serverLabel(s, servers),
+      expiresInSeconds: 1800,
+    };
+  }
+
+  // Primera resolucion: abrir el preferido; el resto quedan como alternativas diferidas.
+  // Si el principal falla, Kino prueba las alternatives automaticamente.
+  let main = null;
+  let used = null;
+  const failures = [];
+  const rest = [];
 
   for (let i = 0; i < servers.length; i++) {
-    if (left() < 2500) break;
     const s = servers[i];
+    if (main) {
+      rest.push({ s: s, idx: i });
+      continue;
+    }
+    if (left() < 3000) {
+      rest.push({ s: s, idx: i });
+      continue;
+    }
     try {
-      const stream = await streamFor(s);
-      if (!stream || !stream.url) continue;
-      const entry = {
-        url: stream.url,
-        name: serverLabel(s, servers),
-        headers: stream.headers || { Referer: originOf(s.url) + "/", "User-Agent": UA },
-      };
-      if (!primary) primary = entry;
-      else alts.push(entry);
+      main = await streamFor(s);
+      used = { s: s, idx: i };
     } catch (e) {
-      errors.push((KIND_LABEL[s.kind] || s.name) + ": " + reasonOf(e));
+      failures.push(serverLabel(s, servers) + ": " + reasonOf(e));
       kino.log("resolve " + s.kind + ": " + ((e && e.message) || e));
+      // Si falla, el siguiente del bucle se intentara en caliente
     }
   }
 
-  if (!primary) {
-    throw fail("unavailable", "ningun servidor (" + errors.slice(0, 4).join("; ") + ")", "serverFailed");
+  if (!main) {
+    throw fail(
+      "unavailable",
+      "ningun servidor (" + failures.slice(0, 4).join("; ") + ")",
+      "serverFailed"
+    );
   }
 
-  const outAlts = [];
-  for (let i = 0; i < alts.length; i++) {
-    outAlts.push({ url: alts[i].url, name: alts[i].name, headers: alts[i].headers });
+  const stream = {
+    url: main.url,
+    headers: main.headers || { Referer: originOf(used.s.url) + "/", "User-Agent": UA },
+    label: serverLabel(used.s, servers),
+    expiresInSeconds: 1800,
+  };
+
+  // Alternativas diferidas: Kino las resuelve solo si el principal falla o el usuario cambia de servidor
+  const alternatives = [];
+  for (let i = 0; i < rest.length && alternatives.length < 8; i++) {
+    const r = rest[i];
+    alternatives.push({
+      label: serverLabel(r.s, servers),
+      ref: "s:" + r.idx + ":e:" + p.slug + ":" + p.num,
+    });
   }
-  return { url: primary.url, headers: primary.headers, alts: outAlts };
+  // Si el preferido fallo y abrimos el 2º, aun asi listar los que no se probaron
+  // Tambien anadir los que fallaron? No: solo los no intentados, para no repetir errores.
+  if (alternatives.length) stream.alternatives = alternatives;
+
+  kino.log(
+    "resolve OK " + stream.label +
+      " + " + alternatives.length + " alternativas"
+  );
+  return stream;
 }
