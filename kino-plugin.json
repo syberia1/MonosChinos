@@ -1,7 +1,7 @@
 {
   "id": "monoschinos",
   "name": "MonosChinos",
-  "version": "3.3.0",
+  "version": "3.4.0",
   "apiVersion": 6,
   "entry": "plugin.js",
   "description": "Anime subtitulado de monoschinos.st. En emision, animes y peliculas.",
@@ -52,7 +52,9 @@
     "waaw.tv",
     "graphql.anilist.co",
     "s4.anilist.co",
-    "anilist.co"
+    "anilist.co",
+    "kitsu.io",
+    "media.kitsu.app"
   ],
   "streamHosts": "any",
   "capabilities": [

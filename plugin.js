@@ -1,4 +1,4 @@
-// MonosChinos Kino plugin 3.3.0 - https://monoschinos.st
+// MonosChinos Kino plugin 3.4.0 - https://monoschinos.st
 // Modelo TioAnime: r.text() metodo, kino.html.select, hosts de redirects.
 
 const BASE = "https://monoschinos.st";
@@ -131,86 +131,105 @@ function posterToBackdrop(poster) {
   return String(poster || "");
 }
 
-// Cloudflare de monoschinos.st bloquea el User-Agent OkHttp de Kino (403).
-// AniList CDN si acepta OkHttp: usamos solo caratulas/fondos; titulos y caps del sitio.
+// Cloudflare de monoschinos.st bloquea OkHttp (403). AniList + Kitsu si cargan en Kino.
 async function anilistPoster(title) {
   const q = String(title || "").replace(/\s+/g, " ").trim().slice(0, 80);
   if (q.length < 2) return null;
-  const key = "al:" + q.toLowerCase();
+  try {
+    const body = JSON.stringify({
+      query: "query($s:String){Page(page:1,perPage:5){media(search:$s,type:ANIME){title{romaji english native}coverImage{large extraLarge}bannerImage}}}",
+      variables: { s: q },
+    });
+    const r = await kino.fetch("https://graphql.anilist.co", {
+      method: "POST",
+      headers: { "User-Agent": UA, "Content-Type": "application/json", Accept: "application/json" },
+      body: body,
+      timeoutMs: 7000,
+    });
+    if (!r || !r.ok) return null;
+    const data = JSON.parse(bodyText(r));
+    const list = (((data || {}).data || {}).Page || {}).media || [];
+    for (let i = 0; i < list.length; i++) {
+      const c = list[i];
+      const poster = (c.coverImage && (c.coverImage.extraLarge || c.coverImage.large)) || "";
+      if (poster) return { poster: poster, backdrop: c.bannerImage || poster, src: "anilist" };
+    }
+  } catch (e) {
+    kino.log("anilist: " + ((e && e.message) || e));
+  }
+  return null;
+}
+
+async function kitsuPoster(title) {
+  const q = String(title || "").replace(/\s+/g, " ").trim().slice(0, 80);
+  if (q.length < 2) return null;
+  try {
+    const url =
+      "https://kitsu.io/api/edge/anime?filter[text]=" +
+      encodeURIComponent(q) +
+      "&page[limit]=3";
+    const r = await kino.fetch(url, {
+      headers: {
+        "User-Agent": UA,
+        Accept: "application/vnd.api+json",
+      },
+      timeoutMs: 7000,
+    });
+    if (!r || !r.ok) return null;
+    const data = JSON.parse(bodyText(r));
+    const list = (data && data.data) || [];
+    for (let i = 0; i < list.length; i++) {
+      const attrs = list[i].attributes || {};
+      const pi = attrs.posterImage || {};
+      const poster = pi.large || pi.medium || pi.original || "";
+      if (!poster) continue;
+      const bi = attrs.coverImage || {};
+      const backdrop = bi.large || bi.original || poster;
+      return { poster: poster, backdrop: backdrop, src: "kitsu" };
+    }
+  } catch (e) {
+    kino.log("kitsu: " + ((e && e.message) || e));
+  }
+  return null;
+}
+
+async function metaPoster(title) {
+  const q = String(title || "").replace(/\s+/g, " ").trim().slice(0, 80);
+  if (q.length < 2) return null;
+  const key = "mp:" + q.toLowerCase();
   try {
     const hit = kino.storage.get(key);
     if (hit === "") return null;
     if (hit && hit.poster) return hit;
   } catch (e) {}
+  let best = await anilistPoster(q);
+  if (!best) best = await kitsuPoster(q);
   try {
-    const body = JSON.stringify({
-      query: "query($s:String){Page(page:1,perPage:3){media(search:$s,type:ANIME){title{romaji english native}coverImage{large extraLarge}bannerImage}}}",
-      variables: { s: q },
-    });
-    const r = await kino.fetch("https://graphql.anilist.co", {
-      method: "POST",
-      headers: {
-        "User-Agent": UA,
-        "Content-Type": "application/json",
-        Accept: "application/json",
-      },
-      body: body,
-      timeoutMs: 6000,
-    });
-    if (!r || !r.ok) {
-      try { kino.storage.set(key, "", { ttlMs: 6 * 3600000 }); } catch (e) {}
-      return null;
-    }
-    const text = bodyText(r);
-    const data = JSON.parse(text);
-    const list = (((data || {}).data || {}).Page || {}).media || [];
-    if (!list.length) {
-      try { kino.storage.set(key, "", { ttlMs: 6 * 3600000 }); } catch (e) {}
-      return null;
-    }
-    // Elegir el primer resultado con cover
-    let best = null;
-    for (let i = 0; i < list.length; i++) {
-      const c = list[i];
-      const poster = (c.coverImage && (c.coverImage.extraLarge || c.coverImage.large)) || "";
-      if (!poster) continue;
-      best = { poster: poster, backdrop: c.bannerImage || poster };
-      break;
-    }
-    if (!best) {
-      try { kino.storage.set(key, "", { ttlMs: 6 * 3600000 }); } catch (e) {}
-      return null;
-    }
-    try { kino.storage.set(key, best, { ttlMs: 14 * 86400000 }); } catch (e) {}
-    return best;
-  } catch (e) {
-    kino.log("anilist: " + ((e && e.message) || e));
-    return null;
-  }
+    kino.storage.set(key, best || "", { ttlMs: best ? 14 * 86400000 : 6 * 3600000 });
+  } catch (e) {}
+  return best;
 }
 
 async function enrichPosters(items, budgetMs) {
   const T = Date.now();
   const out = items.slice();
-  const limit = Math.min(out.length, 18);
+  const limit = out.length;
   let i = 0;
   async function worker() {
     while (i < limit && Date.now() - T < budgetMs) {
       const idx = i++;
       const it = out[idx];
       if (!it || !it.title) continue;
-      // Si ya hay poster del sitio, igual lo sustituimos: Kino no puede cargarlo (CF+OkHttp)
-      const al = await anilistPoster(it.title);
+      if (it.poster && /anilist|kitsu|myanimelist/i.test(it.poster)) continue;
+      const al = await metaPoster(it.title);
       if (al && al.poster) {
         out[idx] = Object.assign({}, it, { poster: al.poster });
       }
     }
   }
-  await Promise.all([worker(), worker(), worker()]);
+  await Promise.all([worker(), worker(), worker(), worker()]);
   return out;
 }
-
-
 
 async function getPage(url, headers, timeoutMs) {
   const opts = {
@@ -270,16 +289,26 @@ function cardsFrom(html, opts) {
     if (!slug || seen[slug]) continue;
     seen[slug] = true;
 
+    // Preferir alt (titulo completo); el h3 a veces viene truncado con "..."
     let title = "";
-    const h3 = /<h3[^>]*>([^<]{2,220})/i.exec(box);
-    if (h3) title = decodeHtml(h3[1]).replace(/\s+/g, " ").trim();
-    if (!title) {
-      const al = /alt=["']([^"']+)["']/i.exec(box);
-      if (al) title = decodeHtml(al[1]).trim();
+    const al = /alt=["']([^"']+)["']/i.exec(box);
+    if (al) title = decodeHtml(al[1]).replace(/\s+/g, " ").trim();
+    if (!title || /\.\.\.$/.test(title)) {
+      const h3 = /<h3[^>]*>([^<]{2,220})/i.exec(box);
+      if (h3) {
+        const t = decodeHtml(h3[1]).replace(/\s+/g, " ").trim();
+        if (t && !/\.\.\.$/.test(t)) title = t;
+        else if (!title) title = t.replace(/\.\.\.$/, "").trim();
+      }
     }
-    if (!title) title = slug.replace(/-sub-espanol$/i, "").replace(/-/g, " ");
+    if (!title || title.length < 2) {
+      title = slug
+        .replace(/-sub-espanol$/i, "")
+        .replace(/-/g, " ")
+        .replace(/\b\w/g, function (c) { return c.toUpperCase(); });
+    }
+    title = title.replace(/\s*\.\.\.\s*$/, "").trim();
 
-    // data-src tiene la caratula real; src suele ser /img/anime.png
     let src = "";
     const ds = /data-src=["']([^"']+)["']/i.exec(box);
     if (ds) src = ds[1];
@@ -305,7 +334,7 @@ export async function search(query) {
   try {
     const page = await getPage(BASE + "/buscar?q=" + encodeURIComponent(q));
     let items = cardsFrom(page.html).slice(0, 30);
-    items = await enrichPosters(items, 10000);
+    items = await enrichPosters(items, 14000);
     return items;
   } catch (e) {
     kino.log("search: " + ((e && e.message) || e));
@@ -325,7 +354,7 @@ export async function home() {
     const b = page.html.indexOf("Generos populares");
     if (a >= 0) slice = page.html.slice(a, b > a ? b : a + 60000);
     let items = cardsFrom(slice);
-    items = await enrichPosters(items.slice(0, 24), 9000);
+    items = await enrichPosters(items.slice(0, 24), 12000);
     kino.log("home emision: " + items.length + (items[0] && items[0].poster ? " p=" + items[0].poster.slice(0, 50) : " SIN POSTER"));
     if (items.length) rows.push({ id: "emision", title: "En emision", items: items });
   } catch (e) {
@@ -337,7 +366,7 @@ export async function home() {
     if (Date.now() - T < 16000) {
       const page = await getPage(BASE + "/animes");
       let items = cardsFrom(page.html);
-      items = await enrichPosters(items.slice(0, 24), 7000);
+      items = await enrichPosters(items.slice(0, 24), 10000);
       kino.log("home animes: " + items.length + (items[0] && items[0].poster ? " p=" + items[0].poster.slice(0, 50) : " SIN POSTER"));
       if (items.length) rows.push({ id: "animes", title: "Animes", items: items });
     }
@@ -350,7 +379,7 @@ export async function home() {
     if (Date.now() - T < 17500) {
       const page = await getPage(BASE + "/animes?categoria=pelicula");
       let items = cardsFrom(page.html, { movies: true });
-      items = await enrichPosters(items.slice(0, 24), 5000);
+      items = await enrichPosters(items.slice(0, 24), 8000);
       kino.log("home peliculas: " + items.length + (items[0] && items[0].poster ? " p=" + items[0].poster.slice(0, 50) : " SIN POSTER"));
       if (items.length) rows.push({ id: "peliculas", title: "Peliculas", items: items });
     }
@@ -377,7 +406,7 @@ export async function browse(ref, cursor) {
   if (pageNum > 1) url += (url.indexOf("?") >= 0 ? "&" : "?") + "page=" + pageNum;
   const page = await getPage(url);
   let items = cardsFrom(page.html, { movies: movies });
-  items = await enrichPosters(items.slice(0, 30), 12000);
+  items = await enrichPosters(items.slice(0, 30), 14000);
   const next = hasNextPage(page.html, pageNum) || items.length >= 20 ? String(pageNum + 1) : null;
   return { items: items, next: next };
 }
@@ -534,13 +563,20 @@ export async function episodes(ref) {
   list.sort(function (a, b) { return a.number - b.number; });
   // Caratula/fondo desde AniList (el CDN del sitio da 403 al cargador de Kino)
   try {
-    const al = await anilistPoster(series.title);
+    const al = await metaPoster(series.title);
     if (al) {
       if (al.poster) series.poster = al.poster;
       if (al.backdrop) series.backdrop = al.backdrop;
     }
   } catch (e) {}
   // stills de caps: el sitio tambien bloquea OkHttp; dejamos URL por si acaso
+  if (series.poster) {
+    for (let i = 0; i < list.length; i++) {
+      if (!list[i].still || /monoschinos\.st/i.test(String(list[i].still))) {
+        list[i].still = series.poster;
+      }
+    }
+  }
   kino.log("episodes OK " + slug + " -> " + list.length + " poster=" + (series.poster || "").slice(0, 60));
   return { series: series, episodes: list };
 }
