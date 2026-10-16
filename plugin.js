@@ -1106,6 +1106,16 @@ async function episodeExtras(slug, title, year, maxNum) {
   return extras;
 }
 
+function savedGet(key) {
+  const raw = cacheGet(key);
+  if (!raw) return null;
+  try {
+    return JSON.parse(raw);
+  } catch (e) {
+    return null;
+  }
+}
+
 export async function episodes(ref) {
   const T = Date.now();
   const left = () => 18500 - (Date.now() - T);
@@ -1647,7 +1657,7 @@ async function uqloadStream(embed) {
 
 // --- Netu / HQQ ---
 async function netuStream(embed) {
-  const page = await getPage(embed, { Referer: BASE + "/" });
+  const page = await getPage(embed, { Referer: BASE + "/", Origin: originOf(embed) || "https://hqq.ac" });
   const html = page.html;
   if (/just a moment|cf-browser-verification|ddos-guard/i.test(html) && html.length < 15000) {
     throw fail("unavailable", "Netu bloqueado por protección anti-bot", "serverFailed");
@@ -1657,14 +1667,23 @@ async function netuStream(embed) {
     const unpacked = unpackAll(html);
     file = findStreamUrl(unpacked);
   }
-  // Variante: src: '...m3u8'
   if (!file) {
-    const m = /src\s*:\s*['"](https?:\/\/[^'"]+\.m3u8[^'"]*)['"]/i.exec(html);
-    if (m) file = m[1];
+    const m =
+      /src\s*:\s*['"](https?:\/\/[^'"]+\.m3u8[^'"]*)['"]/i.exec(html) ||
+      /file\s*:\s*['"](https?:\/\/[^'"]+\.m3u8[^'"]*)['"]/i.exec(html) ||
+      /(https?:\/\/[^"'\\s<>]+\/secip\/[^"'\\s<>]+\.m3u8[^"'\\s<>]*)/i.exec(html);
+    if (m) file = m[1] || m[0];
   }
   if (!file) throw fail("unavailable", goneIn(html) ? "Netu video borrado" : "Netu sin video", "serverFailed");
   if (file.indexOf("//") === 0) file = "https:" + file;
-  return streamResult(file, originOf(page.url) + "/");
+  // CDN de Netu exige Referer del embed; sin él el manifest responde 403 / falla fallida
+  const headers = {
+    Referer: originOf(page.url) + "/",
+    Origin: originOf(page.url),
+    "User-Agent": UA,
+    Accept: "*/*",
+  };
+  return { url: file, headers: headers, alts: [], label: "Netu" };
 }
 
 // --- Genérico: cualquier embed con m3u8/mp4 a la vista o empaquetado ---
@@ -1763,7 +1782,7 @@ export async function resolve(ref) {
         voe: 6,
         yourupload: 7,
         dood: 8,
-        netu: 9,
+        netu: 10,
         filemoon: 18,
         streamwish: 19,
         generic: 20,
