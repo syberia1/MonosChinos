@@ -1,5 +1,5 @@
-// MonosChinos Kino plugin - https://monoschinos.st - apiVersion 6
-// QuickJS-safe. No setTimeout/fetch/URL/atob. Metadata from the site only.
+// MonosChinos para Kino (apiVersion 6) - https://monoschinos.st
+// Modelo TioAnime: r.text() es metodo. QuickJS sin setTimeout/fetch/URL/atob.
 
 const BASE = "https://monoschinos.st";
 const UA =
@@ -26,29 +26,35 @@ const TXT = {
 };
 
 function lang() {
-  try {
-    return String(kino.lang || "es").toLowerCase().indexOf("en") === 0 ? "en" : "es";
-  } catch (e) {
-    return "es";
-  }
+  return String(kino.lang || "es").toLowerCase().indexOf("en") === 0 ? "en" : "es";
 }
 function t(key) {
-  const row = TXT[key];
-  if (!row) return key;
-  return row[lang()] || row.es || key;
+  return TXT[key][lang()];
 }
 function fail(code, detail, key) {
   return kino.error(code, String(detail || "").slice(0, 200), { userMessage: t(key) });
 }
 function reasonOf(e) {
-  const m = String((e && e.message) || e || "");
-  if (/borrad|deleted|not found|removed|HTTP 404/i.test(m)) return "video borrado";
+  const m = String((e && e.message) || "");
+  if (/borrad|deleted|not found|removed|HTTP 404/i.test(m)) return lang() === "en" ? "video removed" : "video borrado";
   const h = /HTTP (\d{3})/.exec(m);
   if (h) return "HTTP " + h[1];
-  if (/timeout|tardo|took too long/i.test(m)) return "tardo demasiado";
-  if (/sin video/i.test(m)) return "sin video";
+  if (/tiempo agotado|timeout|took too long/i.test(m)) return lang() === "en" ? "timed out" : "tardo demasiado";
+  if (/sin video/i.test(m)) return lang() === "en" ? "no video found" : "sin video";
   if (/SPA|protegido/i.test(m)) return m.slice(0, 80);
-  return "fallo";
+  return lang() === "en" ? "failed" : "fallo";
+}
+
+// Cuerpo de kino.fetch: en Kino r.text es METODO (como TioAnime: r.text()).
+function bodyText(r) {
+  if (!r) return "";
+  try {
+    if (typeof r.text === "function") return String(r.text() || "");
+  } catch (e) {
+    /* ignore */
+  }
+  if (typeof r.text === "string") return r.text;
+  return "";
 }
 
 function b64bytes(s) {
@@ -152,30 +158,47 @@ function posterToBackdrop(poster) {
   return "";
 }
 
+// Igual que TioAnime: reintento ante 429/5xx y r.text()
 async function getPage(url, headers, timeoutMs) {
-  const h = { "User-Agent": UA, Accept: "text/html,application/json,*/*" };
-  if (headers) {
-    for (const k in headers) {
-      if (Object.prototype.hasOwnProperty.call(headers, k)) h[k] = headers[k];
+  const opts = {
+    headers: Object.assign(
+      { "User-Agent": UA, "Accept-Language": "es-ES,es;q=0.9", Accept: "text/html,application/xhtml+xml,*/*" },
+      headers || {}
+    ),
+    timeoutMs: timeoutMs || 12000,
+  };
+  let r = null;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      r = await kino.fetch(url, opts);
+    } catch (e) {
+      if (attempt === 1 || (e && e.code === "timeout")) {
+        throw fail("unavailable", (e && e.code === "timeout" ? "tiempo agotado " : "red ") + ((e && e.message) || e), "siteDown");
+      }
+      await kino.sleep(600);
+      continue;
     }
+    if ((r.status === 429 || r.status >= 500) && attempt === 0) {
+      await kino.sleep(900);
+      continue;
+    }
+    break;
   }
-  const r = await kino.fetch(url, { headers: h, timeoutMs: timeoutMs || 15000 });
-  if (!r || !r.ok) {
-    const st = r ? r.status : 0;
-    throw fail("unavailable", "HTTP " + st + " " + url, "siteDown");
-  }
-  return { url: r.url || url, html: String(r.text || "") };
+  if (r.status === 404) throw fail("not_found", "HTTP 404 " + url, "notFound");
+  if (!r.ok) throw fail("unavailable", "HTTP " + r.status + " " + url, "siteDown");
+  return { html: bodyText(r), url: r.url || url };
 }
 
 function mkItem(slug, title, poster, movie) {
   if (!slug || !ID_OK.test(slug)) return null;
-  return {
+  const item = {
     id: slug,
     kind: movie ? "movie" : "series",
     title: String(title || slug.replace(/-/g, " ")).slice(0, 200),
-    poster: poster || "",
     ref: "a:" + slug,
   };
+  if (poster) item.poster = poster;
+  return item;
 }
 
 function cardsAnime(html) {
@@ -188,8 +211,7 @@ function cardsAnime(html) {
     const slug = x[1];
     if (!slug || seen[slug]) continue;
     seen[slug] = true;
-    const start = x.index - 80;
-    const from = start < 0 ? 0 : start;
+    const from = x.index > 80 ? x.index - 80 : 0;
     const chunk = src.slice(from, x.index + 1400);
     let poster = attrOf(chunk, "data-src");
     if (!poster || /anime\.png/i.test(poster)) {
@@ -220,8 +242,7 @@ function cardsEpisodes(html) {
     const slug = x[1];
     if (!slug || seen[slug]) continue;
     seen[slug] = true;
-    const start = x.index - 80;
-    const from = start < 0 ? 0 : start;
+    const from = x.index > 80 ? x.index - 80 : 0;
     const chunk = src.slice(from, x.index + 1400);
     let title = "";
     const h3 = /<h3[^>]*>([^<]{2,200})/i.exec(chunk);
@@ -237,8 +258,7 @@ function cardsEpisodes(html) {
 }
 
 function hasNextPage(html, page) {
-  const src = String(html || "");
-  return new RegExp("[?&]page=" + (page + 1) + "(?![0-9])").test(src);
+  return new RegExp("[?&]page=" + (page + 1) + "(?![0-9])").test(String(html || ""));
 }
 
 export async function search(query) {
@@ -257,9 +277,9 @@ export async function search(query) {
       timeoutMs: 10000,
     });
     if (!r || !r.ok) return [];
-    const text = String(r.text || "").trim();
-    if (text.charAt(0) !== "[") {
-      kino.log("search ajax: not JSON");
+    const text = bodyText(r).trim();
+    if (!text || text.charAt(0) !== "[") {
+      kino.log("search ajax: not JSON len=" + text.length);
       return [];
     }
     const data = JSON.parse(text);
@@ -347,7 +367,7 @@ async function fetchJson(url) {
     timeoutMs: 12000,
   });
   if (!r || !r.ok) throw fail("unavailable", "HTTP " + (r ? r.status : 0), "siteDown");
-  const text = String(r.text || "").trim();
+  const text = bodyText(r).trim();
   if (!text || (text.charAt(0) !== "{" && text.charAt(0) !== "[")) {
     throw fail("unavailable", "respuesta no JSON", "noEpisodes");
   }
@@ -634,10 +654,6 @@ async function packerStream(embed, label) {
   return streamResult(file, originOf(page.url) + "/", label);
 }
 
-async function voeStream(embed) {
-  return packerStream(embed, "Voe");
-}
-
 function randomAlpha(n) {
   const abc = "abcdefghijklmnopqrstuvwxyz";
   let s = "";
@@ -649,17 +665,19 @@ async function doodStream(embed) {
   const m = /\/pass_md5\/([^"'\s]+)/.exec(page.html);
   if (!m) throw fail("unavailable", goneIn(page.html) ? "Dood borrado" : "Dood sin video", "serverFailed");
   const pass = await getPage(originOf(page.url) + "/pass_md5/" + m[1], { Referer: page.url });
-  const token = String(pass.html || "").trim();
-  if (!token || token.length > 500) throw fail("unavailable", "Dood sin token", "serverFailed");
+  const token = bodyText({ text: pass.html }) || String(pass.html || "").trim();
+  // pass.html already string from getPage
+  const tok = String(pass.html || "").trim();
+  if (!tok || tok.length > 500) throw fail("unavailable", "Dood sin token", "serverFailed");
   const parts = m[1].split("/");
-  const file = token + randomAlpha(10) + "?token=" + (parts[parts.length - 1] || "") + "&expiry=" + Date.now();
+  const file = tok + randomAlpha(10) + "?token=" + (parts[parts.length - 1] || "") + "&expiry=" + Date.now();
   return streamResult(file.indexOf("http") === 0 ? file : originOf(page.url) + file, originOf(page.url) + "/", "Doodstream");
 }
 
 async function streamFor(s) {
   switch (s.kind) {
     case "voe":
-      return voeStream(s.url);
+      return packerStream(s.url, "Voe");
     case "dood":
       return doodStream(s.url);
     case "mixdrop":

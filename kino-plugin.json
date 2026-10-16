@@ -1,7 +1,7 @@
 {
   "id": "monoschinos",
   "name": "MonosChinos",
-  "version": "2.3.0",
+  "version": "2.4.0",
   "apiVersion": 6,
   "entry": "plugin.js",
   "description": "Anime subtitulado de monoschinos.st con portadas, fondos y capitulos del sitio.",
