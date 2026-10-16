@@ -1,7 +1,9 @@
-// MonosChinos Kino plugin 3.4.0 - https://monoschinos.st
-// Modelo TioAnime: r.text() metodo, kino.html.select, hosts de redirects.
+// MonosChinos Kino plugin 3.5.0 - https://monoschinos.st
+// Caratulas y episodios con TMDB (kino.tmdb / kino.meta) + imagenes propias de monoschinos.st
 
 const BASE = "https://monoschinos.st";
+const TMDB_IMG_W500 = "https://image.tmdb.org/t/p/w500";
+const TMDB_IMG_W780 = "https://image.tmdb.org/t/p/w780";
 const UA =
   "Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36";
 const ID_OK = /^[A-Za-z0-9._~-]{1,128}$/;
@@ -104,112 +106,242 @@ function decodeHtml(s) {
     .replace(/&nbsp;/g, " ");
 }
 
-// Normaliza imagenes del sitio a JPEG del CDN (thumbs/*.jpg.webp -> img/serie/*/*.jpg)
+// Conserva y normaliza las imagenes propias de monoschinos.st
 function cleanImg(u) {
   u = abs(u);
   if (!u || /anime\.png|capblank|placeholder/i.test(u)) return "";
   u = u.replace(/[?#].*$/, "");
-  // /assets/thumbs/imagen/NAME.jpg.webp  OR  NAME.webp  OR  NAME.jpg
   let m = /\/assets\/thumbs\/imagen\/([^/]+)$/i.exec(u);
   if (m) {
-    let name = m[1].replace(/\.(webp|jpg|jpeg|png)$/i, "");
-    name = name.replace(/\.(webp|jpg|jpeg|png)$/i, "");
+    let name = m[1].replace(/\.(webp|jpg|jpeg|png)$/i, "").replace(/\.(webp|jpg|jpeg|png)$/i, "");
     return BASE + "/assets/img/serie/imagen/" + name + ".jpg";
   }
   m = /\/assets\/thumbs\/portada\/([^/]+)$/i.exec(u);
   if (m) {
-    let name = m[1].replace(/\.(webp|jpg|jpeg|png)$/i, "");
-    name = name.replace(/\.(webp|jpg|jpeg|png)$/i, "");
+    let name = m[1].replace(/\.(webp|jpg|jpeg|png)$/i, "").replace(/\.(webp|jpg|jpeg|png)$/i, "");
     return BASE + "/assets/img/serie/portada/" + name + ".jpg";
   }
-  // Ya es /assets/img/serie/... : quitar .webp si viniera
-  u = u.replace(/\.jpg\.webp$/i, ".jpg").replace(/\.webp$/i, ".jpg");
+  m = /\/assets\/thumbs\/cap\/([^/]+)$/i.exec(u);
+  if (m) {
+    let name = m[1].replace(/\.(webp|jpg|jpeg|png)$/i, "").replace(/\.(webp|jpg|jpeg|png)$/i, "");
+    return BASE + "/assets/img/cap/" + name + ".jpg";
+  }
+  u = u.replace(/\.jpg\.webp$/i, ".jpg");
   return u;
 }
-function posterToBackdrop(poster) {
-  // El sitio no publica un banner aparte fiable: usar el mismo poster como fondo
-  return String(poster || "");
+
+// Limpia el titulo para buscar en TMDB y extrae el numero de temporada si lo lleva
+function parseTitleAndSeason(rawTitle) {
+  let clean = String(rawTitle || "")
+    .replace(/\s*\(Sub\s*Espa[ñn]ol\)\s*/gi, " ")
+    .replace(/\s*Sub\s*Espa[ñn]ol\s*/gi, " ")
+    .replace(/\s*\((?:TV|OVA|ONA|Pelicula|Película|Especial|Blu-?ray)\)\s*/gi, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  let season = 1;
+  const sm =
+    /(?:Temporada|Season|Part|Parte|Cour)\s*(\d+)/i.exec(clean) ||
+    /\bS(\d{1,2})\b/i.exec(clean) ||
+    /\b(\d)(?:nd|rd|th)\s+Season\b/i.exec(clean);
+  if (sm) {
+    season = Math.max(1, parseInt(sm[1], 10) || 1);
+  }
+  const baseTitle = clean
+    .replace(/\s*[-:–]?\s*(?:Temporada|Season|Part|Parte|Cour)\s*\d+.*$/i, "")
+    .replace(/\s+\bS\d{1,2}\b.*$/i, "")
+    .replace(/\s+\b\d(?:nd|rd|th)\s+Season\b.*$/i, "")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  return {
+    full: clean,
+    base: baseTitle || clean,
+    season: season,
+  };
 }
 
-// Cloudflare de monoschinos.st bloquea OkHttp (403). AniList + Kitsu si cargan en Kino.
-async function anilistPoster(title) {
-  const q = String(title || "").replace(/\s+/g, " ").trim().slice(0, 80);
-  if (q.length < 2) return null;
+// Wrapper compatible con cualquier firma de kino.tmdb en Kino
+async function callTmdb(path, params) {
+  if (typeof kino === "undefined" || !kino.tmdb) return null;
+  const cleanPath = path.charAt(0) === "/" ? path : "/" + path;
+  const qs = [];
+  if (params) {
+    const keys = Object.keys(params);
+    for (let i = 0; i < keys.length; i++) {
+      const k = keys[i];
+      if (params[k] !== undefined && params[k] !== null && params[k] !== "") {
+        qs.push(encodeURIComponent(k) + "=" + encodeURIComponent(String(params[k])));
+      }
+    }
+  }
+  const fullPath = qs.length ? cleanPath + "?" + qs.join("&") : cleanPath;
+
   try {
-    const body = JSON.stringify({
-      query: "query($s:String){Page(page:1,perPage:5){media(search:$s,type:ANIME){title{romaji english native}coverImage{large extraLarge}bannerImage}}}",
-      variables: { s: q },
-    });
-    const r = await kino.fetch("https://graphql.anilist.co", {
-      method: "POST",
-      headers: { "User-Agent": UA, "Content-Type": "application/json", Accept: "application/json" },
-      body: body,
-      timeoutMs: 7000,
-    });
-    if (!r || !r.ok) return null;
-    const data = JSON.parse(bodyText(r));
-    const list = (((data || {}).data || {}).Page || {}).media || [];
-    for (let i = 0; i < list.length; i++) {
-      const c = list[i];
-      const poster = (c.coverImage && (c.coverImage.extraLarge || c.coverImage.large)) || "";
-      if (poster) return { poster: poster, backdrop: c.bannerImage || poster, src: "anilist" };
+    if (typeof kino.tmdb === "function") {
+      return await kino.tmdb(cleanPath, params || {});
+    }
+    if (typeof kino.tmdb.get === "function") {
+      return await kino.tmdb.get(cleanPath, params || {});
+    }
+    if (typeof kino.tmdb.fetch === "function") {
+      return await kino.tmdb.fetch(fullPath);
     }
   } catch (e) {
-    kino.log("anilist: " + ((e && e.message) || e));
+    try {
+      if (typeof kino.tmdb === "function") return await kino.tmdb(fullPath);
+    } catch (e2) {}
   }
   return null;
 }
 
-async function kitsuPoster(title) {
-  const q = String(title || "").replace(/\s+/g, " ").trim().slice(0, 80);
+// Busca en TMDB (y kino.meta como apoyo) el poster, backdrop e ID de TMDB
+async function tmdbLookup(title, isMovie, altTitle) {
+  const parsed = parseTitleAndSeason(title);
+  const q = parsed.base.slice(0, 80);
   if (q.length < 2) return null;
-  try {
-    const url =
-      "https://kitsu.io/api/edge/anime?filter[text]=" +
-      encodeURIComponent(q) +
-      "&page[limit]=3";
-    const r = await kino.fetch(url, {
-      headers: {
-        "User-Agent": UA,
-        Accept: "application/vnd.api+json",
-      },
-      timeoutMs: 7000,
-    });
-    if (!r || !r.ok) return null;
-    const data = JSON.parse(bodyText(r));
-    const list = (data && data.data) || [];
-    for (let i = 0; i < list.length; i++) {
-      const attrs = list[i].attributes || {};
-      const pi = attrs.posterImage || {};
-      const poster = pi.large || pi.medium || pi.original || "";
-      if (!poster) continue;
-      const bi = attrs.coverImage || {};
-      const backdrop = bi.large || bi.original || poster;
-      return { poster: poster, backdrop: backdrop, src: "kitsu" };
-    }
-  } catch (e) {
-    kino.log("kitsu: " + ((e && e.message) || e));
-  }
-  return null;
-}
 
-async function metaPoster(title) {
-  const q = String(title || "").replace(/\s+/g, " ").trim().slice(0, 80);
-  if (q.length < 2) return null;
-  const key = "mp:" + q.toLowerCase();
+  const cacheKey = "tmdb35:" + (isMovie ? "m:" : "tv:") + q.toLowerCase();
   try {
-    const hit = kino.storage.get(key);
+    const hit = kino.storage.get(cacheKey);
     if (hit === "") return null;
-    if (hit && hit.poster) return hit;
+    if (hit && (hit.poster || hit.tmdbId)) return Object.assign({}, hit, { season: parsed.season });
   } catch (e) {}
-  let best = await anilistPoster(q);
-  if (!best) best = await kitsuPoster(q);
+
+  const queries = [q];
+  if (altTitle) {
+    const altParsed = parseTitleAndSeason(altTitle);
+    if (altParsed.base && altParsed.base.toLowerCase() !== q.toLowerCase()) {
+      queries.push(altParsed.base.slice(0, 80));
+    }
+  }
+  if (parsed.full.toLowerCase() !== q.toLowerCase()) {
+    queries.push(parsed.full.slice(0, 80));
+  }
+
+  let best = null;
+  const endpoint = isMovie ? "/search/movie" : "/search/tv";
+
+  for (let qi = 0; qi < queries.length && !best; qi++) {
+    const queryStr = queries[qi];
+    const data =
+      (await callTmdb(endpoint, { query: queryStr, language: "es-MX" })) ||
+      (await callTmdb(endpoint, { query: queryStr, language: "en-US" }));
+    const results = (data && data.results) || [];
+    if (!results.length) continue;
+
+    // Priorizar animacion (genre_id 16) o origen japones
+    let chosen = null;
+    for (let i = 0; i < results.length; i++) {
+      const r = results[i];
+      const genres = r.genre_ids || [];
+      const countries = r.origin_country || [];
+      const isAnim = genres.indexOf(16) >= 0 || countries.indexOf("JP") >= 0 || r.original_language === "ja";
+      if (isAnim && (r.poster_path || r.backdrop_path)) {
+        chosen = r;
+        break;
+      }
+    }
+    if (!chosen) chosen = results[0];
+    if (chosen && (chosen.poster_path || chosen.backdrop_path || chosen.id)) {
+      best = {
+        tmdbId: chosen.id || 0,
+        kind: isMovie ? "movie" : "tv",
+        poster: chosen.poster_path ? TMDB_IMG_W500 + chosen.poster_path : "",
+        backdrop: chosen.backdrop_path
+          ? TMDB_IMG_W780 + chosen.backdrop_path
+          : chosen.poster_path
+          ? TMDB_IMG_W500 + chosen.poster_path
+          : "",
+        overview: chosen.overview || "",
+      };
+    }
+  }
+
+  // Si era serie y no salio en /search/tv, probar /search/multi
+  if (!best) {
+    const multi = await callTmdb("/search/multi", { query: q, language: "es-MX" });
+    const results = (multi && multi.results) || [];
+    for (let i = 0; i < results.length; i++) {
+      const r = results[i];
+      if (r && (r.poster_path || r.backdrop_path)) {
+        best = {
+          tmdbId: r.id || 0,
+          kind: r.media_type === "movie" ? "movie" : "tv",
+          poster: r.poster_path ? TMDB_IMG_W500 + r.poster_path : "",
+          backdrop: r.backdrop_path
+            ? TMDB_IMG_W780 + r.backdrop_path
+            : r.poster_path
+            ? TMDB_IMG_W500 + r.poster_path
+            : "",
+          overview: r.overview || "",
+        };
+        break;
+      }
+    }
+  }
+
+  // Fallback adicional con kino.meta si esta disponible
+  if (!best && typeof kino !== "undefined" && typeof kino.meta === "function") {
+    try {
+      const m = await kino.meta({ title: q, kind: isMovie ? "movie" : "series" });
+      if (m && (m.poster || m.backdrop)) {
+        best = {
+          tmdbId: m.tmdbId || m.id || 0,
+          kind: isMovie ? "movie" : "tv",
+          poster: m.poster || "",
+          backdrop: m.backdrop || m.poster || "",
+          overview: m.overview || "",
+        };
+      }
+    } catch (e) {}
+  }
+
   try {
-    kino.storage.set(key, best || "", { ttlMs: best ? 14 * 86400000 : 6 * 3600000 });
+    kino.storage.set(cacheKey, best || "", { ttlMs: best ? 14 * 86400000 : 6 * 3600000 });
   } catch (e) {}
-  return best;
+
+  return best ? Object.assign({}, best, { season: parsed.season }) : null;
 }
 
+// Obtiene las imagenes (stills) y titulos de cada episodio de TMDB
+async function tmdbSeasonStills(tmdbId, seasonNum) {
+  if (!tmdbId) return {};
+  const sNum = Math.max(1, parseInt(seasonNum, 10) || 1);
+  const cacheKey = "tmdbs35:" + tmdbId + ":" + sNum;
+  try {
+    const hit = kino.storage.get(cacheKey);
+    if (hit && typeof hit === "object") return hit;
+  } catch (e) {}
+
+  let data = await callTmdb("/tv/" + tmdbId + "/season/" + sNum, { language: "es-MX" });
+  if (!data || !data.episodes || !data.episodes.length) {
+    if (sNum !== 1) {
+      data = await callTmdb("/tv/" + tmdbId + "/season/1", { language: "es-MX" });
+    }
+  }
+
+  const map = {};
+  const eps = (data && data.episodes) || [];
+  for (let i = 0; i < eps.length; i++) {
+    const ep = eps[i];
+    const num = parseInt(ep.episode_number, 10);
+    if (!num) continue;
+    map[num] = {
+      still: ep.still_path ? TMDB_IMG_W500 + ep.still_path : "",
+      name: ep.name || "",
+    };
+  }
+
+  try {
+    if (Object.keys(map).length > 0) {
+      kino.storage.set(cacheKey, map, { ttlMs: 7 * 86400000 });
+    }
+  } catch (e) {}
+  return map;
+}
+
+// Enriquecimiento de caratulas: intenta TMDB y deja la imagen propia de monoschinos.st si no hay resultado
 async function enrichPosters(items, budgetMs) {
   const T = Date.now();
   const out = items.slice();
@@ -220,10 +352,10 @@ async function enrichPosters(items, budgetMs) {
       const idx = i++;
       const it = out[idx];
       if (!it || !it.title) continue;
-      if (it.poster && /anilist|kitsu|myanimelist/i.test(it.poster)) continue;
-      const al = await metaPoster(it.title);
-      if (al && al.poster) {
-        out[idx] = Object.assign({}, it, { poster: al.poster });
+      if (it.poster && /image\.tmdb\.org/i.test(it.poster)) continue;
+      const info = await tmdbLookup(it.title, it.kind === "movie");
+      if (info && info.poster) {
+        out[idx] = Object.assign({}, it, { poster: info.poster });
       }
     }
   }
@@ -263,7 +395,6 @@ async function getPage(url, headers, timeoutMs) {
 
 function mkItem(slug, title, poster, movie) {
   if (!slug || !ID_OK.test(slug)) return null;
-  // Quitar sufijo -sub-espanol del id visible si hace ruido, pero mantener slug real en ref
   const item = {
     id: slug,
     kind: movie ? "movie" : "series",
@@ -274,12 +405,48 @@ function mkItem(slug, title, poster, movie) {
   return item;
 }
 
-// Tarjetas <article>: regex fiable sobre data-src (src es placeholder anime.png)
+function extractTitleFromBox(box, fallbackSlug) {
+  let title = "";
+  const al = /alt=["']([^"']+)["']/i.exec(box);
+  if (al) title = decodeHtml(al[1]).replace(/\s+/g, " ").trim();
+  if (!title || /\.\.\.$/.test(title)) {
+    const h = /<(?:h2|h3|h4)[^>]*>([\s\S]*?)<\/(?:h2|h3|h4)>/i.exec(box);
+    if (h) {
+      const t = decodeHtml(h[1].replace(/<[^>]+>/g, "")).replace(/\s+/g, " ").trim();
+      if (t && !/\.\.\.$/.test(t)) title = t;
+      else if (!title) title = t.replace(/\.\.\.$/, "").trim();
+    }
+  }
+  if (!title || title.length < 2) {
+    title = String(fallbackSlug || "")
+      .replace(/-sub-espanol$/i, "")
+      .replace(/-/g, " ")
+      .replace(/\b\w/g, function (c) { return c.toUpperCase(); });
+  }
+  return title
+    .replace(/\s*-\s*Episodio\s*\d+.*$/i, "")
+    .replace(/\s+Episodio\s*\d+\s*$/i, "")
+    .replace(/\s*\.\.\.\s*$/, "")
+    .trim();
+}
+
+function extractImgFromBox(box) {
+  let src = "";
+  const ds = /data-src=["']([^"']+)["']/i.exec(box);
+  if (ds) src = ds[1];
+  if (!src || /anime\.png|capblank/i.test(src)) {
+    const ss = /src=["']([^"']*(?:assets|img|thumbs|portada|imagen)[^"']+)["']/i.exec(box);
+    if (ss) src = ss[1];
+  }
+  return cleanImg(src);
+}
+
+// Tarjetas de catalogo (/anime/...)
 function cardsFrom(html, opts) {
   opts = opts || {};
   const items = [];
   const seen = {};
-  const re = /<article[\s\S]*?<\/article>/gi;
+  const re = /<article[\s\S]*?<\/article>|<li[^>]*class=["'][^"']*(?:anime|item|card|col)[^"']*["'][\s\S]*?<\/li>/gi;
   let m;
   while ((m = re.exec(String(html || "")))) {
     const box = m[0];
@@ -287,41 +454,124 @@ function cardsFrom(html, opts) {
     if (!hm) continue;
     const slug = hm[2];
     if (!slug || seen[slug]) continue;
+
+    const isCardMovie =
+      !!opts.movies ||
+      />\s*Pel[ií]cula\s*</i.test(box) ||
+      /\bPel[ií]cula\b/i.test(box.replace(/<[^>]+>/g, " "));
+    if (opts.onlyMovies && !isCardMovie) continue;
+
     seen[slug] = true;
-
-    // Preferir alt (titulo completo); el h3 a veces viene truncado con "..."
-    let title = "";
-    const al = /alt=["']([^"']+)["']/i.exec(box);
-    if (al) title = decodeHtml(al[1]).replace(/\s+/g, " ").trim();
-    if (!title || /\.\.\.$/.test(title)) {
-      const h3 = /<h3[^>]*>([^<]{2,220})/i.exec(box);
-      if (h3) {
-        const t = decodeHtml(h3[1]).replace(/\s+/g, " ").trim();
-        if (t && !/\.\.\.$/.test(t)) title = t;
-        else if (!title) title = t.replace(/\.\.\.$/, "").trim();
-      }
-    }
-    if (!title || title.length < 2) {
-      title = slug
-        .replace(/-sub-espanol$/i, "")
-        .replace(/-/g, " ")
-        .replace(/\b\w/g, function (c) { return c.toUpperCase(); });
-    }
-    title = title.replace(/\s*\.\.\.\s*$/, "").trim();
-
-    let src = "";
-    const ds = /data-src=["']([^"']+)["']/i.exec(box);
-    if (ds) src = ds[1];
-    if (!src || /anime\.png/i.test(src)) {
-      const ss = /src=["']([^"']*assets[^"']+)["']/i.exec(box);
-      if (ss) src = ss[1];
-    }
-    const poster = cleanImg(src);
-    const movie = !!opts.movies;
-    const item = mkItem(slug, title, poster, movie);
+    const title = extractTitleFromBox(box, slug);
+    const poster = extractImgFromBox(box);
+    const item = mkItem(slug, title, poster, isCardMovie);
     if (item) items.push(item);
   }
   return items;
+}
+
+// Extrae los animes que salen en "Ultimos capitulos" (/ver/<slug>-episodio-<n>)
+function latestEpisodesFrom(html) {
+  const src = String(html || "");
+  let slice = src;
+
+  const uIdx = src.search(/[ÚU]ltimos\s+cap[íi]tulos/i);
+  if (uIdx >= 0) {
+    const endIdx = src.indexOf("Series recientes", uIdx);
+    slice = src.slice(uIdx, endIdx > uIdx ? endIdx : uIdx + 80000);
+  }
+
+  const items = [];
+  const seen = {};
+
+  // 1) Buscar por bloques <article> o <li> con enlaces a /ver/...-episodio-N
+  const blockRe = /<(?:article|li)\b[\s\S]*?<\/(?:article|li)>/gi;
+  let bm;
+  while ((bm = blockRe.exec(slice))) {
+    const box = bm[0];
+    const vm = /href=["'][^"']*\/ver\/([A-Za-z0-9._~-]+?)-episodio-(\d+)["']/i.exec(box);
+    if (!vm) continue;
+    const baseSlug = vm[1].replace(/-sub-espanol$/i, "");
+    const animeSlug = baseSlug + "-sub-espanol";
+    if (seen[animeSlug]) continue;
+    seen[animeSlug] = true;
+
+    const title = extractTitleFromBox(box, baseSlug);
+    const poster = extractImgFromBox(box);
+    const item = mkItem(animeSlug, title, poster, false);
+    if (item) items.push(item);
+  }
+
+  // 2) Fallback por si los enlaces /ver/ estan en <a>/<div class="..."> fuera de <article>/<li>
+  if (!items.length) {
+    const linkRe = /<a[^>]*href=["'][^"']*\/ver\/([A-Za-z0-9._~-]+?)-episodio-(\d+)["'][^>]*>([\s\S]*?)<\/a>/gi;
+    let lm;
+    while ((lm = linkRe.exec(slice))) {
+      const baseSlug = lm[1].replace(/-sub-espanol$/i, "");
+      const animeSlug = baseSlug + "-sub-espanol";
+      if (seen[animeSlug]) continue;
+      seen[animeSlug] = true;
+      const inner = lm[3];
+      const title = extractTitleFromBox(inner, baseSlug);
+      const poster = extractImgFromBox(inner);
+      const item = mkItem(animeSlug, title, poster, false);
+      if (item) items.push(item);
+    }
+  }
+
+  return items;
+}
+
+// Obtiene el apartado de Peliculas probando los parametros reales de monoschinos.st
+async function fetchMoviesPage(pageNum) {
+  const candidates = [
+    BASE + "/animes?tipo=pelicula",
+    BASE + "/animes?tipo=Pelicula",
+    BASE + "/animes?categoria=pelicula",
+    BASE + "/animes?categoria=Pelicula",
+  ];
+
+  // Si es la pagina 1, tambien podemos descubrir el enlace exacto desde el filtro de /animes
+  for (let i = 0; i < candidates.length; i++) {
+    let url = candidates[i];
+    if (pageNum > 1) url += (url.indexOf("?") >= 0 ? "&" : "?") + "page=" + pageNum;
+    try {
+      const page = await getPage(url);
+      // Verificar si la pagina devolvio exclusivamente peliculas o el listado general sin filtrar
+      const strictMovies = cardsFrom(page.html, { movies: true, onlyMovies: true });
+      if (strictMovies.length > 0) {
+        return { items: strictMovies, html: page.html };
+      }
+      // Si el HTML mismo tiene un link especifico para Pelicula en sus filtros, descubrirlo
+      const filterMatch = /href=["']([^"']*\/animes\?[^"']*(?:pelicula|Pelicula|tipo=3)[^"']*)["']/i.exec(page.html);
+      if (filterMatch) {
+        let discovered = abs(decodeHtml(filterMatch[1]));
+        if (pageNum > 1) {
+          discovered = discovered.replace(/[?&]page=\d+/i, "");
+          discovered += (discovered.indexOf("?") >= 0 ? "&" : "?") + "page=" + pageNum;
+        }
+        if (discovered !== url) {
+          const dPage = await getPage(discovered);
+          const dItems = cardsFrom(dPage.html, { movies: true });
+          if (dItems.length > 0) return { items: dItems, html: dPage.html };
+        }
+      }
+      // Si ?tipo=pelicula devolvio tarjetas aunque no tengan badge visible de "Pelicula"
+      if (i === 0) {
+        const allCards = cardsFrom(page.html, { movies: true });
+        if (allCards.length > 0 && !/>\s*Anime\s*</i.test(page.html)) {
+          return { items: allCards, html: page.html };
+        }
+      }
+    } catch (e) {
+      kino.log("movies try " + url + ": " + ((e && e.message) || e));
+    }
+  }
+
+  // Fallback final: devolver las tarjetas de ?tipo=pelicula marcadas como movie
+  const fallbackUrl = BASE + "/animes?tipo=pelicula" + (pageNum > 1 ? "&page=" + pageNum : "");
+  const page = await getPage(fallbackUrl);
+  return { items: cardsFrom(page.html, { movies: true }), html: page.html };
 }
 
 function hasNextPage(html, page) {
@@ -334,7 +584,7 @@ export async function search(query) {
   try {
     const page = await getPage(BASE + "/buscar?q=" + encodeURIComponent(q));
     let items = cardsFrom(page.html).slice(0, 30);
-    items = await enrichPosters(items, 14000);
+    items = await enrichPosters(items, 12000);
     return items;
   } catch (e) {
     kino.log("search: " + ((e && e.message) || e));
@@ -346,16 +596,15 @@ export async function home() {
   const rows = [];
   const T = Date.now();
 
-  // 1) En emision = "Series recientes" de la portada
+  // 1) En emision = Animes que salen en "Ultimos capitulos" de la portada
   try {
     const page = await getPage(BASE + "/");
-    let slice = page.html;
-    const a = page.html.indexOf("Series recientes");
-    const b = page.html.indexOf("Generos populares");
-    if (a >= 0) slice = page.html.slice(a, b > a ? b : a + 60000);
-    let items = cardsFrom(slice);
-    items = await enrichPosters(items.slice(0, 24), 12000);
-    kino.log("home emision: " + items.length + (items[0] && items[0].poster ? " p=" + items[0].poster.slice(0, 50) : " SIN POSTER"));
+    let items = latestEpisodesFrom(page.html);
+    if (!items.length) {
+      items = cardsFrom(page.html);
+    }
+    items = await enrichPosters(items.slice(0, 24), 8000);
+    kino.log("home emision (ultimos caps): " + items.length);
     if (items.length) rows.push({ id: "emision", title: "En emision", items: items });
   } catch (e) {
     kino.log("home emision: " + ((e && e.message) || e));
@@ -363,11 +612,11 @@ export async function home() {
 
   // 2) Animes
   try {
-    if (Date.now() - T < 16000) {
+    if (Date.now() - T < 14000) {
       const page = await getPage(BASE + "/animes");
       let items = cardsFrom(page.html);
-      items = await enrichPosters(items.slice(0, 24), 10000);
-      kino.log("home animes: " + items.length + (items[0] && items[0].poster ? " p=" + items[0].poster.slice(0, 50) : " SIN POSTER"));
+      items = await enrichPosters(items.slice(0, 24), 6000);
+      kino.log("home animes: " + items.length);
       if (items.length) rows.push({ id: "animes", title: "Animes", items: items });
     }
   } catch (e) {
@@ -377,10 +626,10 @@ export async function home() {
   // 3) Peliculas
   try {
     if (Date.now() - T < 17500) {
-      const page = await getPage(BASE + "/animes?categoria=pelicula");
-      let items = cardsFrom(page.html, { movies: true });
-      items = await enrichPosters(items.slice(0, 24), 8000);
-      kino.log("home peliculas: " + items.length + (items[0] && items[0].poster ? " p=" + items[0].poster.slice(0, 50) : " SIN POSTER"));
+      const res = await fetchMoviesPage(1);
+      let items = res.items.slice(0, 24);
+      items = await enrichPosters(items, 5000);
+      kino.log("home peliculas: " + items.length);
       if (items.length) rows.push({ id: "peliculas", title: "Peliculas", items: items });
     }
   } catch (e) {
@@ -392,21 +641,38 @@ export async function home() {
 
 export async function browse(ref, cursor) {
   const pageNum = Math.max(1, parseInt(cursor || "1", 10) || 1);
-  let url = BASE + "/animes";
-  let movies = false;
+
   if (ref === "emision") {
-    // Sin filtro server-side real: primera pagina = recientes de /animes
-    url = BASE + "/animes";
-  } else if (ref === "peliculas") {
-    url = BASE + "/animes?categoria=pelicula";
-    movies = true;
-  } else if (ref === "animes") {
-    url = BASE + "/animes";
+    if (pageNum === 1) {
+      const homePage = await getPage(BASE + "/");
+      let latest = latestEpisodesFrom(homePage.html);
+      if (latest.length) {
+        latest = await enrichPosters(latest.slice(0, 30), 12000);
+        return { items: latest, next: "2" };
+      }
+    }
+    // Paginas siguientes: filtrar por en emision / estreno en el directorio
+    const url = BASE + "/animes?estado=estreno&page=" + pageNum;
+    const page = await getPage(url);
+    let items = cardsFrom(page.html);
+    items = await enrichPosters(items.slice(0, 30), 12000);
+    const next = hasNextPage(page.html, pageNum) || items.length >= 20 ? String(pageNum + 1) : null;
+    return { items: items, next: next };
   }
-  if (pageNum > 1) url += (url.indexOf("?") >= 0 ? "&" : "?") + "page=" + pageNum;
+
+  if (ref === "peliculas") {
+    const res = await fetchMoviesPage(pageNum);
+    let items = res.items.slice(0, 30);
+    items = await enrichPosters(items, 12000);
+    const next = hasNextPage(res.html, pageNum) || items.length >= 20 ? String(pageNum + 1) : null;
+    return { items: items, next: next };
+  }
+
+  let url = BASE + "/animes";
+  if (pageNum > 1) url += "?page=" + pageNum;
   const page = await getPage(url);
-  let items = cardsFrom(page.html, { movies: movies });
-  items = await enrichPosters(items.slice(0, 30), 14000);
+  let items = cardsFrom(page.html);
+  items = await enrichPosters(items.slice(0, 30), 12000);
   const next = hasNextPage(page.html, pageNum) || items.length >= 20 ? String(pageNum + 1) : null;
   return { items: items, next: next };
 }
@@ -430,7 +696,7 @@ async function fetchJson(url) {
 }
 
 function parseSeriesHtml(html, slug) {
-  const series = { title: "", poster: "", backdrop: "", overview: "" };
+  const series = { title: "", altTitle: "", isMovie: false, poster: "", backdrop: "", overview: "" };
   try {
     const h1 = kino.html.select(html, "h1")[0];
     if (h1 && h1.text) series.title = String(h1.text).replace(/\s+/g, " ").trim();
@@ -441,22 +707,31 @@ function parseSeriesHtml(html, slug) {
   }
   if (!series.title) series.title = slug.replace(/-sub-espanol$/i, "").replace(/-/g, " ");
 
+  // Detectar nombre alternativo / ingles en la ficha para mejorar la busqueda en TMDB
+  const altM = /Nombre\s+alternativo[\s\S]{0,160}?>([^<]{2,140})</i.exec(html);
+  if (altM) series.altTitle = decodeHtml(altM[1]).replace(/\s+/g, " ").trim();
+
+  if (/Tipo[\s\S]{0,120}?Pel[ií]cula/i.test(html)) {
+    series.isMovie = true;
+  }
+
   let og = "";
   try {
     const meta = kino.html.select(html, "meta[property=og:image]")[0];
     if (meta && meta.attrs && meta.attrs.content) og = meta.attrs.content;
   } catch (e) {}
   if (!og) {
-    const ogi = /property=["']og:image["'][^>]*content=["']([^"']+)["']/i.exec(html)
-      || /content=["']([^"']+)["'][^>]*property=["']og:image["']/i.exec(html);
+    const ogi =
+      /property=["']og:image["'][^>]*content=["']([^"']+)["']/i.exec(html) ||
+      /content=["']([^"']+)["'][^>]*property=["']og:image["']/i.exec(html);
     if (ogi) og = ogi[1];
   }
-  series.poster = cleanImg(og) || cleanImg(og);
+  series.poster = cleanImg(og);
   if (!series.poster) {
     const ds = /data-src=["']([^"']*\/assets\/(?:img|thumbs)\/[^"']+)["']/i.exec(html);
     if (ds) series.poster = cleanImg(ds[1]);
   }
-  series.backdrop = posterToBackdrop(series.poster) || series.poster || "";
+  series.backdrop = series.poster || "";
 
   const sin = /Sinopsis[\s\S]{0,300}<p[^>]*>([^<]{20,1500})<\/p>/i.exec(html);
   if (sin) series.overview = decodeHtml(sin[1]).replace(/\s+/g, " ").trim().slice(0, 2000);
@@ -482,7 +757,6 @@ export async function episodes(ref) {
     const page = await getPage(BASE + "/anime/" + slug, null, 14000);
     html = page.html;
   } catch (e) {
-    // Probar con/sin -sub-espanol
     const alt = /sub-espanol$/i.test(slug) ? slug.replace(/-sub-espanol$/i, "") : slug + "-sub-espanol";
     try {
       const page = await getPage(BASE + "/anime/" + alt, null, 12000);
@@ -492,7 +766,24 @@ export async function episodes(ref) {
     }
   }
 
-  const series = parseSeriesHtml(html, slug);
+  const parsedSeries = parseSeriesHtml(html, slug);
+
+  // Consultar TMDB en paralelo o antes de armar los capitulos para tener caratula, backdrop y stills
+  let tmdbInfo = null;
+  let tmdbStills = {};
+  try {
+    tmdbInfo = await tmdbLookup(parsedSeries.title, parsedSeries.isMovie, parsedSeries.altTitle);
+    if (tmdbInfo) {
+      if (tmdbInfo.poster) parsedSeries.poster = tmdbInfo.poster;
+      if (tmdbInfo.backdrop) parsedSeries.backdrop = tmdbInfo.backdrop;
+      if (!parsedSeries.overview && tmdbInfo.overview) parsedSeries.overview = tmdbInfo.overview;
+      if (tmdbInfo.tmdbId && tmdbInfo.kind === "tv") {
+        tmdbStills = await tmdbSeasonStills(tmdbInfo.tmdbId, tmdbInfo.season || 1);
+      }
+    }
+  } catch (e) {
+    kino.log("episodes tmdb: " + ((e && e.message) || e));
+  }
 
   const ajaxM = /data-ajax=["']([^"']+)["']/i.exec(html);
   if (!ajaxM) throw fail("not_found", "sin data-ajax", "noEpisodes");
@@ -525,6 +816,12 @@ export async function episodes(ref) {
     }
   }
 
+  const defaultStill =
+    (tmdbInfo && (tmdbInfo.backdrop || tmdbInfo.poster)) ||
+    parsedSeries.backdrop ||
+    parsedSeries.poster ||
+    "";
+
   const list = [];
   const seen = {};
   if (caps.length) {
@@ -536,12 +833,17 @@ export async function episodes(ref) {
       let epSlug = slug.replace(/-sub-espanol$/i, "");
       const vm = /\/ver\/([A-Za-z0-9._~-]+)-episodio-(\d+)/.exec(String(c.url || ""));
       if (vm) epSlug = vm[1];
+
+      const tmdbEp = tmdbStills[n] || {};
+      const epStill = tmdbEp.still || defaultStill || (c.thumb ? cleanImg(c.thumb) : "");
+      const epTitle = tmdbEp.name ? t("episode") + n + ": " + tmdbEp.name : t("episode") + n;
+
       list.push({
         season: 1,
         number: n,
         ref: "e:" + epSlug + ":" + n,
-        title: t("episode") + n,
-        still: c.thumb ? cleanImg(c.thumb) : (series.poster || ""),
+        title: epTitle.slice(0, 200),
+        still: epStill,
       });
     }
   } else {
@@ -549,36 +851,32 @@ export async function episodes(ref) {
       const n = parseInt(epsMeta[i].num, 10);
       if (!n || seen[n]) continue;
       seen[n] = true;
+      const tmdbEp = tmdbStills[n] || {};
+      const epStill = tmdbEp.still || defaultStill;
+      const epTitle = tmdbEp.name ? t("episode") + n + ": " + tmdbEp.name : t("episode") + n;
+
       list.push({
         season: 1,
         number: n,
         ref: "e:" + slug.replace(/-sub-espanol$/i, "") + ":" + n,
-        title: t("episode") + n,
-        still: series.poster || "",
+        title: epTitle.slice(0, 200),
+        still: epStill,
       });
     }
   }
 
   if (!list.length) throw fail("not_found", "0 capitulos", "noEpisodes");
   list.sort(function (a, b) { return a.number - b.number; });
-  // Caratula/fondo desde AniList (el CDN del sitio da 403 al cargador de Kino)
-  try {
-    const al = await metaPoster(series.title);
-    if (al) {
-      if (al.poster) series.poster = al.poster;
-      if (al.backdrop) series.backdrop = al.backdrop;
-    }
-  } catch (e) {}
-  // stills de caps: el sitio tambien bloquea OkHttp; dejamos URL por si acaso
-  if (series.poster) {
-    for (let i = 0; i < list.length; i++) {
-      if (!list[i].still || /monoschinos\.st/i.test(String(list[i].still))) {
-        list[i].still = series.poster;
-      }
-    }
-  }
-  kino.log("episodes OK " + slug + " -> " + list.length + " poster=" + (series.poster || "").slice(0, 60));
-  return { series: series, episodes: list };
+
+  const seriesOut = {
+    title: parsedSeries.title,
+    poster: parsedSeries.poster,
+    backdrop: parsedSeries.backdrop || parsedSeries.poster,
+    overview: parsedSeries.overview,
+  };
+
+  kino.log("episodes OK " + slug + " -> " + list.length + " poster=" + (seriesOut.poster || "").slice(0, 60));
+  return { series: seriesOut, episodes: list };
 }
 
 const KIND_LABEL = {
@@ -682,7 +980,6 @@ function findStreamUrl(html) {
     const mm = patterns[i].exec(src);
     if (mm) return unslash(mm[1] || mm[0]);
   }
-  // mp4upload style: a3.mp4upload.com:183/d/.../video.mp4
   m = /https?:\/\/[a-z0-9.-]+(?::\d+)?\/d\/[^"'\s<>]+\/video\.mp4/i.exec(src);
   if (m) return m[0];
   return "";
@@ -759,8 +1056,6 @@ async function streamFor(s) {
   }
 }
 
-// ref de episodio: e:slug:num
-// ref de servidor concreto (alternativa diferida): s:idx:e:slug:num
 function parseResolveRef(ref) {
   let m = /^s:(\d+):e:([A-Za-z0-9._~-]+):(\d+)$/.exec(String(ref || ""));
   if (m) return { idx: parseInt(m[1], 10), slug: m[2], num: parseInt(m[3], 10) };
@@ -796,7 +1091,6 @@ export async function resolve(ref) {
   );
   if (!servers.length) throw fail("not_found", "sin servidores", "noServers");
 
-  // Un server concreto (alternativa del menu / reintento automatico)
   if (p.idx >= 0) {
     const s = servers[p.idx];
     if (!s) throw fail("not_found", "servidor " + p.idx + " no existe", "noServers");
@@ -809,8 +1103,6 @@ export async function resolve(ref) {
     };
   }
 
-  // Primera resolucion: abrir el preferido; el resto quedan como alternativas diferidas.
-  // Si el principal falla, Kino prueba las alternatives automaticamente.
   let main = null;
   let used = null;
   const failures = [];
@@ -832,7 +1124,6 @@ export async function resolve(ref) {
     } catch (e) {
       failures.push(serverLabel(s, servers) + ": " + reasonOf(e));
       kino.log("resolve " + s.kind + ": " + ((e && e.message) || e));
-      // Si falla, el siguiente del bucle se intentara en caliente
     }
   }
 
@@ -851,7 +1142,6 @@ export async function resolve(ref) {
     expiresInSeconds: 1800,
   };
 
-  // Alternativas diferidas: Kino las resuelve solo si el principal falla o el usuario cambia de servidor
   const alternatives = [];
   for (let i = 0; i < rest.length && alternatives.length < 8; i++) {
     const r = rest[i];
@@ -860,13 +1150,8 @@ export async function resolve(ref) {
       ref: "s:" + r.idx + ":e:" + p.slug + ":" + p.num,
     });
   }
-  // Si el preferido fallo y abrimos el 2º, aun asi listar los que no se probaron
-  // Tambien anadir los que fallaron? No: solo los no intentados, para no repetir errores.
   if (alternatives.length) stream.alternatives = alternatives;
 
-  kino.log(
-    "resolve OK " + stream.label +
-      " + " + alternatives.length + " alternativas"
-  );
+  kino.log("resolve OK " + stream.label + " + " + alternatives.length + " alternativas");
   return stream;
 }

@@ -1,7 +1,7 @@
 {
   "id": "monoschinos",
   "name": "MonosChinos",
-  "version": "3.4.0",
+  "version": "3.5.0",
   "apiVersion": 6,
   "entry": "plugin.js",
   "description": "Anime subtitulado de monoschinos.st. En emision, animes y peliculas.",
@@ -9,6 +9,7 @@
   "hosts": [
     "monoschinos.st",
     "www.monoschinos.st",
+    "image.tmdb.org",
     "mixdrop.top",
     "mixdrop.co",
     "mixdrop.ag",
@@ -49,12 +50,7 @@
     "vidhide.com",
     "vidhidepro.com",
     "hqq.tv",
-    "waaw.tv",
-    "graphql.anilist.co",
-    "s4.anilist.co",
-    "anilist.co",
-    "kitsu.io",
-    "media.kitsu.app"
+    "waaw.tv"
   ],
   "streamHosts": "any",
   "capabilities": [
