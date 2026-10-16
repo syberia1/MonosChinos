@@ -1108,117 +1108,115 @@ async function episodeExtras(slug, title, year, maxNum) {
 
 
 // ---------- Ficha del anime y lista de capítulos (MonosChinos) ----------
+// La lista de capítulos NO viene en el HTML inicial: hay un <section class="caplist"
+// data-i="ID" data-e="TOTAL" data-u="slug"> y se rellena con POST /ajax_pagination
+// acc=episodes&i=ID&e=TOTAL.
 
 function parseAnimePage(html, slug) {
-  const info = {};
-  const h1 = kino.html.select(html, "h1")[0];
-  if (h1 && h1.text.trim()) info.title = h1.text.replace(/\s+/g, " ").trim().slice(0, 200);
+  const info = { title: "", poster: "", overview: "", genres: [] };
+  // Título
+  const h1m = /<h1[^>]*>([^<]{2,200})<\/h1>/i.exec(html);
+  if (h1m) info.title = h1m[1].replace(/\s+/g, " ").trim();
+  if (!info.title) {
+    const ogt = /property=["']og:title["'][^>]*content=["']([^"']+)["']/i.exec(html)
+      || /content=["']([^"']+)["'][^>]*property=["']og:title["']/i.exec(html);
+    if (ogt) info.title = ogt[1].replace(/\s+/g, " ").trim();
+  }
   if (!info.title) info.title = slug.replace(/-/g, " ");
 
   // Portada
-  const og = kino.html.select(html, "meta[property=og:image]")[0];
-  if (og && og.attrs.content) info.poster = abs(og.attrs.content);
+  const ogi = /property=["']og:image["'][^>]*content=["']([^"']+)["']/i.exec(html)
+    || /content=["']([^"']+)["'][^>]*property=["']og:image["']/i.exec(html);
+  if (ogi) info.poster = abs(ogi[1]);
   if (!info.poster) {
-    const m = /data-src=["']([^"']*cdn\/img\/anime\/[^"']+)["']/i.exec(html);
-    if (m) info.poster = abs(m[1]);
+    const ds = /data-src=["']([^"']*\/cdn\/img\/anime\/[^"']+)["']/i.exec(html);
+    if (ds) info.poster = abs(ds[1]);
   }
   if (!info.poster) info.poster = posterFromSlug(slug, true);
-  if (info.poster) info.poster = String(info.poster).replace(/\?t=[^&]+/, "");
+  if (info.poster) info.poster = String(info.poster).replace(/\?t=[^&#]+/g, "");
 
-  // Sinopsis (meta description suele ser SEO; limpiar)
-  const ogd = kino.html.select(html, "meta[property=og:description]")[0] || kino.html.select(html, "meta[name=description]")[0];
-  if (ogd && ogd.attrs.content) {
-    let raw = ogd.attrs.content;
-    let text = raw
+  // Sinopsis (solo si no es SEO)
+  const ogd = /property=["']og:description["'][^>]*content=["']([^"']+)["']/i.exec(html)
+    || /name=["']description["'][^>]*content=["']([^"']+)["']/i.exec(html);
+  if (ogd) {
+    let text = ogd[1]
       .replace(/^ver online[\s\S]*?MonosChinos2\s*/i, "")
       .replace(/ver online[^,]*,?/gi, "")
-      .replace(/Mira[^,]*(?:Sub Español)?[^,]*,?/gi, "")
+      .replace(/Mira[^,]*,?/gi, "")
       .replace(/online gratis,?/gi, "")
       .replace(/en Sub Español[^,]*,?/gi, "")
       .replace(/y descarga en[^,]*,?/gi, "")
       .replace(/Monos\s*Chinos2?,?/gi, "")
       .replace(/\s+/g, " ")
       .trim();
-    const seo = /online gratis|ver online|monoschinos|sub español|descarga en/i.test(text);
-    if (text.length >= 20 && !seo) info.overview = text.slice(0, 2000);
+    if (text.length >= 25 && !/online gratis|ver online|monoschinos|sub español/i.test(text)) {
+      info.overview = text.slice(0, 2000);
+    }
   }
 
-  // Géneros
-  const genres = [];
-  const reG = /href=["'][^"']*genero[^"']*["'][^>]*>([^<]+)/gi;
-  let g;
-  while ((g = reG.exec(html))) {
-    const name = g[1].replace(/\s+/g, " ").trim();
-    if (name && name.length < 40 && genres.indexOf(name) < 0) genres.push(name);
-  }
-  if (genres.length) info.genres = genres.slice(0, 5);
-
-  // Año
-  const y = /\b(20[0-2]\d)\b/.exec(html);
-  // No confiar en años del footer (2000); buscar cerca de "Año" o en aired
-  const y2 = /Año[^0-9]{0,20}(20\d{2})/i.exec(html) || /year[^0-9]{0,10}(20\d{2})/i.exec(html);
-  if (y2) info.year = y2[1];
-
-  // Capítulos visibles en la ficha
-  const nums = {};
-  const re = new RegExp("/ver/(?:[^\"']*?/)?" + slug.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + "-episodio-(\\d+)", "gi");
-  let x;
-  while ((x = re.exec(html))) {
-    const n = parseInt(x[1], 10);
-    if (n >= 0 && n < 99999) nums[n] = true;
-  }
-  // data-i / data-e para AJAX
-  const di = /data-i=["'](\d+)["']/.exec(html);
-  const de = /data-e=["'](\d+)["']/.exec(html);
+  // data-i / data-e / data-u del listado de capítulos
+  const sec = /<section[^>]*class=["'][^"']*caplist[^"']*["'][^>]*>/i.exec(html)
+    || /id=["']dt["'][^>]*>/i.exec(html)
+    || [""];
+  const block = sec[0] || html;
+  const di = /data-i=["'](\d+)["']/.exec(block) || /data-i=["'](\d+)["']/.exec(html);
+  const de = /data-e=["'](\d+)["']/.exec(block) || /data-e=["'](\d+)["']/.exec(html);
+  const du = /data-u=["']([^"']+)["']/.exec(block);
   const epId = di ? di[1] : "";
-  const epTotal = de ? parseInt(de[1], 10) : 0;
-  if (epTotal > 0 && Object.keys(nums).length < epTotal) {
-    // rellenar 1..epTotal si aún no hay lista
+  const epTotal = de ? parseInt(de[1], 10) || 0 : 0;
+  if (du && du[1] && !slug) slug = du[1];
+
+  // Capítulos ya presentes en el HTML (pocas veces)
+  const nums = {};
+  const reEp = /episodio-(\d+)/gi;
+  let x;
+  while ((x = reEp.exec(html))) {
+    const n = parseInt(x[1], 10);
+    if (n > 0 && n < 99999) nums[n] = true;
   }
-  const numbers = Object.keys(nums)
-    .map(Number)
-    .sort((a, b) => a - b)
-    .slice(0, 2000);
+  const numbers = Object.keys(nums).map(Number).sort((a, b) => a - b);
   return { numbers, info, epId, epTotal };
 }
 
 async function fetchEpisodeNumbers(slug, epId, epTotal) {
-  if (!epId) return [];
+  const out = {};
+  if (!epId) {
+    if (epTotal > 0) {
+      for (let i = 1; i <= Math.min(epTotal, 2000); i++) out[i] = true;
+    }
+    return Object.keys(out).map(Number).sort((a, b) => a - b);
+  }
   try {
     const body = "acc=episodes&i=" + encodeURIComponent(epId) + "&e=" + encodeURIComponent(String(epTotal || 1));
     const r = await kino.fetch(BASE + "/ajax_pagination", {
       method: "POST",
       headers: {
         "User-Agent": UA,
-        "Content-Type": "application/x-www-form-urlencoded",
+        Accept: "text/html, */*",
+        "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
         "X-Requested-With": "XMLHttpRequest",
         Referer: BASE + "/anime/" + slug,
         Origin: BASE,
       },
       body: body,
-      timeoutMs: 12000,
+      timeoutMs: 14000,
     });
-    if (!r.ok) return [];
-    const html = r.text || "";
-    const nums = {};
+    const html = (r && r.text) || "";
     const re = /episodio-(\d+)/gi;
     let x;
     while ((x = re.exec(html))) {
       const n = parseInt(x[1], 10);
-      if (n >= 0 && n < 99999) nums[n] = true;
+      if (n > 0 && n < 99999) out[n] = true;
     }
-    // Si el AJAX no trae números pero conocemos el total, generar 1..N
-    if (!Object.keys(nums).length && epTotal > 0) {
-      for (let i = 1; i <= Math.min(epTotal, 2000); i++) nums[i] = true;
-    }
-    return Object.keys(nums)
-      .map(Number)
-      .sort((a, b) => a - b)
-      .slice(0, 2000);
+    kino.log("episodios AJAX: " + Object.keys(out).length + " (id=" + epId + " total=" + epTotal + ")");
   } catch (e) {
-    kino.log("fetchEpisodeNumbers: " + (e && e.message));
-    return [];
+    kino.log("episodios AJAX falló: " + (e && e.message));
   }
+  // Fallback: 1..epTotal si el AJAX no trajo nada
+  if (!Object.keys(out).length && epTotal > 0) {
+    for (let i = 1; i <= Math.min(epTotal, 2000); i++) out[i] = true;
+  }
+  return Object.keys(out).map(Number).sort((a, b) => a - b);
 }
 
 function savedGet(key) {
@@ -1234,50 +1232,56 @@ function savedGet(key) {
 export async function episodes(ref) {
   const T = Date.now();
   const left = () => 18500 - (Date.now() - T);
-  const m = /^a:([A-Za-z0-9._~-]+)$/.exec(String(ref));
-  if (!m) throw fail("not_found", "ref " + ref, "badRef");
+  const m = /^a:([A-Za-z0-9._~-]+)$/.exec(String(ref || ""));
+  if (!m) throw fail("not_found", "ref inválido: " + ref, "badRef");
   const slug = m[1];
 
-  const key = "ep6:" + slug; // ep3: lista completa vía AJAX (antes ep1 solo veía 1 capítulo)
-  const saved = savedGet(key);
-  let data = saved && saved.data && Date.now() - saved.t < 10 * 60000 ? saved.data : null;
-  if (!data) {
+  // 1) Cargar ficha + números de capítulo (siempre, con fallbacks)
+  let info = { title: slug.replace(/-/g, " "), poster: posterFromSlug(slug, true) };
+  let numbers = [];
+  try {
+    const page = await getPage(BASE + "/anime/" + slug, null, 14000);
+    const parsed = parseAnimePage(page.html, slug);
+    info = parsed.info || info;
+    if (!info.poster) info.poster = posterFromSlug(slug, true);
+    numbers = parsed.numbers || [];
+    // Lista completa por AJAX
+    if (parsed.epId || parsed.epTotal) {
+      const fromAjax = await fetchEpisodeNumbers(slug, parsed.epId, parsed.epTotal);
+      if (fromAjax.length) numbers = fromAjax;
+    }
+    // Último recurso: al menos 1 capítulo si data-e dice algo
+    if (!numbers.length && parsed.epTotal > 0) {
+      for (let i = 1; i <= Math.min(parsed.epTotal, 2000); i++) numbers.push(i);
+    }
+  } catch (e) {
+    kino.log("episodes ficha: " + (e && e.message));
+  }
+  // Si aún no hay números, asumir al menos el capítulo 1 para no dejar la ficha vacía
+  if (!numbers.length) {
+    kino.log("episodes: sin lista, se usa [1] para " + slug);
+    numbers = [1];
+  }
+
+  // 2) Metadatos de capítulos (TMDB / meta / MAL) — nunca tumbar la lista si falla
+  let extras = {};
+  if (left() > 2500) {
     try {
-      const page = await getPage(BASE + "/anime/" + slug, null, 14000);
-      data = parseAnimePage(page.html, slug);
-      // La ficha solo trae 0–2 enlaces; la lista completa va por AJAX (data-i / data-e).
-      if (data.epId && (data.numbers.length < 2 || (data.epTotal && data.numbers.length < data.epTotal))) {
-        const fromAjax = await fetchEpisodeNumbers(slug, data.epId, data.epTotal);
-        if (fromAjax.length) data.numbers = fromAjax;
-      }
-      if (!data.numbers.length && data.epTotal > 0) {
-        data.numbers = [];
-        for (let i = 1; i <= Math.min(data.epTotal, 2000); i++) data.numbers.push(i);
-      }
-      if (data.numbers.length) cacheSet(key, JSON.stringify({ t: Date.now(), data }), 12 * 3600000);
+      const got = await within(
+        episodeExtras(slug, info.title || slug, parseInt(info.year, 10) || 0, numbers[numbers.length - 1] || numbers.length),
+        Math.min(5500, left() - 1200)
+      );
+      if (got && got !== LATE) extras = got;
     } catch (e) {
-      if (!saved || !saved.data) throw e;
-      kino.log("episodes: se usa la copia guardada (" + (e && e.message) + ")");
-      data = saved.data;
+      kino.log("episodeExtras: " + (e && e.message));
     }
   }
-  const numbers = data.numbers;
-  const info = Object.assign({}, data.info);
-  const slugTitle = slug.replace(/-/g, " ");
-  let extras = {};
-  if (left() > 3000) {
-    const got = await within(
-      episodeExtras(slug, info.title || slugTitle, parseInt(info.year, 10) || 0, numbers.length ? numbers[numbers.length - 1] : 0),
-      Math.min(6000, left() - 1500)
-    );
-    if (got !== LATE) extras = got || {};
-  }
-  const shift = numbers.length && numbers[0] === 0 ? 1 : 0;
-  const titleSeason = splitTitle(info.title || slugTitle);
+
+  const titleSeason = splitTitle(info.title || slug);
   const list = numbers.map((n) => {
     const ep = {
       season: titleSeason.marked ? titleSeason.season : 1,
-      number: n + shift,
+      number: n,
       ref: "e:" + slug + ":" + n,
       title: t("episode") + n,
     };
@@ -1291,37 +1295,46 @@ export async function episodes(ref) {
     }
     return ep;
   });
-  try {
-    const extra =
-      left() > 2500
-        ? await within(infoFor({ id: slug, kind: "series", title: info.title || slugTitle, year: parseInt(info.year, 10) || 0 }), Math.min(3000, left() - 1000))
-        : null;
-    if (extra && extra !== LATE) {
-      if (extra.backdrop) info.backdrop = extra.backdrop;
-      if (extra.overview && ((info.overview || "").length < 100 || /online gratis|monoschinos|ver online/i.test(info.overview || ""))) info.overview = extra.overview;
-      if (extra.poster && !info.poster) info.poster = extra.poster;
-    }
-    // Respaldo MAL/meta si aún falta sinopsis o fondo
-    if ((!info.overview || (info.overview || "").length < 80 || /online gratis|monoschinos/i.test(info.overview || "")) || !info.backdrop) {
-      try {
-        let fill = null;
-        if (typeof kino.meta === "function") fill = await metaByTitle(info.title || slugTitle, parseInt(info.year, 10) || 0);
-        if (!fill || !fill.overview) {
-          const a = await malSearchAnime(info.title || slugTitle, parseInt(info.year, 10) || 0);
-          if (a) fill = malToInfo((await malAnimeFull(a.mal_id)) || a);
+
+  // 3) Rellenar sinopsis / fondo sin tumbar episodios
+  if (left() > 2000) {
+    try {
+      const extra = await within(
+        infoFor({ id: slug, kind: "series", title: info.title || slug, year: parseInt(info.year, 10) || 0 }),
+        Math.min(2800, left() - 800)
+      );
+      if (extra && extra !== LATE) {
+        if (extra.backdrop) info.backdrop = extra.backdrop;
+        if (extra.overview && ((info.overview || "").length < 100 || /online gratis|monoschinos/i.test(info.overview || ""))) {
+          info.overview = extra.overview;
         }
-        if (fill) {
-          if (fill.overview && ((info.overview || "").length < 100 || /online gratis|monoschinos/i.test(info.overview || ""))) info.overview = fill.overview;
-          if (fill.backdrop && !info.backdrop) info.backdrop = fill.backdrop;
-          if (fill.poster && !info.poster) info.poster = fill.poster;
-        }
-      } catch (e2) {
-        kino.log("mal fill: " + (e2 && e2.message));
+        if (extra.poster && !info.poster) info.poster = extra.poster;
       }
+    } catch (e) {
+      kino.log("infoFor: " + (e && e.message));
     }
-  } catch (e) {
-    kino.log("ficha sin TMDB: " + (e && e.message));
   }
+  if (left() > 1500 && (!info.overview || (info.overview || "").length < 80 || !info.backdrop)) {
+    try {
+      let fill = null;
+      if (typeof kino.meta === "function") fill = await metaByTitle(info.title || slug, parseInt(info.year, 10) || 0);
+      if ((!fill || !fill.overview) && left() > 1200) {
+        const a = await malSearchAnime(info.title || slug, parseInt(info.year, 10) || 0);
+        if (a) fill = malToInfo((await malAnimeFull(a.mal_id)) || a);
+      }
+      if (fill) {
+        if (fill.overview && ((info.overview || "").length < 100 || /online gratis|monoschinos/i.test(info.overview || ""))) {
+          info.overview = fill.overview;
+        }
+        if (fill.backdrop && !info.backdrop) info.backdrop = fill.backdrop;
+        if (fill.poster && !info.poster) info.poster = fill.poster;
+      }
+    } catch (e) {
+      kino.log("mal fill: " + (e && e.message));
+    }
+  }
+
+  kino.log("episodes OK: " + slug + " → " + list.length + " caps");
   return { series: info, episodes: list };
 }
 

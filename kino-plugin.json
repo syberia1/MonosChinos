@@ -1,7 +1,7 @@
 {
   "id": "monoschinos",
   "name": "MonosChinos",
-  "version": "1.4.2",
+  "version": "1.5.0",
   "apiVersion": 6,
   "entry": "plugin.js",
   "description": "Anime subtitulado de MonosChinos2. Metadatos TMDB/AniList/MAL; servidores MixDrop, Mp4Upload, Voe, Netu y más.",
