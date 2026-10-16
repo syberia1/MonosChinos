@@ -1,16 +1,41 @@
 {
   "id": "monoschinos",
   "name": "MonosChinos",
-  "version": "2.2.0",
+  "version": "2.3.0",
   "apiVersion": 6,
   "entry": "plugin.js",
-  "description": "Anime subtitulado de monoschinos.st. Portadas, fondos y capitulos del propio sitio.",
+  "description": "Anime subtitulado de monoschinos.st con portadas, fondos y capitulos del sitio.",
   "author": "tu-usuario-de-github",
   "hosts": [
     "monoschinos.st",
-    "www.monoschinos.st"
+    "www.monoschinos.st",
+    "mixdrop.top",
+    "mixdrop.co",
+    "mixdrop.ag",
+    "voe.sx",
+    "jilliandescribecompany.com",
+    "www.mp4upload.com",
+    "mp4upload.com",
+    "luluvdo.com",
+    "lulustream.com",
+    "savefiles.com",
+    "streamhls.to",
+    "dsvplay.com",
+    "dood.watch",
+    "doodstream.com",
+    "bysekoze.com",
+    "filemoon.to",
+    "filemoon.sx",
+    "hexload.com",
+    "uqload.com",
+    "uqload.co",
+    "streamwish.to",
+    "streamwish.com",
+    "vidhide.com",
+    "vidhidepro.com",
+    "hqq.tv",
+    "waaw.tv"
   ],
-  "fetchHosts": "any",
   "streamHosts": "any",
   "capabilities": [
     "search",
@@ -57,10 +82,6 @@
         {
           "value": "dood",
           "label": "Doodstream"
-        },
-        {
-          "value": "uqload",
-          "label": "Uqload"
         },
         {
           "value": "hexload",
