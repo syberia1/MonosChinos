@@ -210,22 +210,24 @@ function cardsAnime(html) {
   while ((x = re.exec(src))) {
     const slug = x[1];
     if (!slug || seen[slug]) continue;
-    seen[slug] = true;
-    const from = x.index > 80 ? x.index - 80 : 0;
-    const chunk = src.slice(from, x.index + 1400);
+    const from = x.index > 120 ? x.index - 120 : 0;
+    const chunk = src.slice(from, x.index + 1600);
     let poster = attrOf(chunk, "data-src");
-    if (!poster || /anime\.png/i.test(poster)) {
+    if (!poster || /anime\.png|capblank/i.test(poster)) {
       const s = attrOf(chunk, "src");
-      if (s && /assets\/thumbs/i.test(s)) poster = s;
+      if (s && /assets\/(thumbs|img)/i.test(s) && !/anime\.png/i.test(s)) poster = s;
       else poster = "";
     }
     poster = cleanImg(poster);
     let title = cleanTitle(attrOf(chunk, "alt"));
     if (!title) {
-      const h3 = /<h3[^>]*>([^<]{2,200})/i.exec(chunk);
+      const h3 = /<h3[^>]*>([^<]{2,220})/i.exec(chunk);
       if (h3) title = cleanTitle(h3[1]);
     }
     if (!title) title = slug.replace(/-/g, " ");
+    // Si no hay poster ni titulo decente y el enlace es del footer, saltar
+    if (!poster && title === slug.replace(/-/g, " ")) continue;
+    seen[slug] = true;
     const item = mkItem(slug, title, poster, false);
     if (item) items.push(item);
   }
@@ -233,7 +235,13 @@ function cardsAnime(html) {
 }
 
 function cardsEpisodes(html) {
-  const src = String(html || "");
+  const full = String(html || "");
+  // Preferir el bloque "Ultimos capitulos" para no mezclar con el hero
+  let src = full;
+  const a = full.search(/[UÚ]ltimos cap[ií]tulos/i);
+  const b = full.indexOf("Series recientes");
+  if (a >= 0) src = full.slice(a, b > a ? b : a + 80000);
+
   const items = [];
   const seen = {};
   const re = /\/ver\/([A-Za-z0-9._~-]+)-episodio-(\d+)/g;
@@ -241,18 +249,43 @@ function cardsEpisodes(html) {
   while ((x = re.exec(src))) {
     const slug = x[1];
     if (!slug || seen[slug]) continue;
-    seen[slug] = true;
-    const from = x.index > 80 ? x.index - 80 : 0;
-    const chunk = src.slice(from, x.index + 1400);
+    const from = x.index > 200 ? x.index - 200 : 0;
+    const chunk = src.slice(from, x.index + 1800);
     let title = "";
-    const h3 = /<h3[^>]*>([^<]{2,200})/i.exec(chunk);
+    const h3 = /<h3[^>]*>([^<]{2,220})/i.exec(chunk);
     if (h3) title = cleanTitle(h3[1]);
-    if (!title) title = cleanTitle(attrOf(chunk, "alt"));
-    if (!title) title = slug.replace(/-/g, " ");
+    if (!title) title = cleanTitle(attrOf(chunk, "alt")).replace(/\s+capitulo\s+\d+$/i, "");
+    // Si no hay titulo real (solo el slug), saltar: suele ser un enlace del hero
+    if (!title || title === slug.replace(/-/g, " ")) continue;
+    seen[slug] = true;
     let poster = cleanImg(attrOf(chunk, "data-src") || attrOf(chunk, "src"));
     if (/capblank|anime\.png/i.test(poster)) poster = "";
+    // Convertir miniatura de capitulo a poster vertical del anime si se puede
+    const bd = posterToBackdrop(poster);
+    if (bd) {
+      // portada horizontal esta bien como poster de fila de capitulos
+    }
     const item = mkItem(slug, title, poster, false);
     if (item) items.push(item);
+  }
+  // Fallback: si el bloque no dio nada, escanear todo (aceptando slug)
+  if (!items.length) {
+    const re2 = /\/ver\/([A-Za-z0-9._~-]+)-episodio-(\d+)/g;
+    let y;
+    while ((y = re2.exec(full))) {
+      const slug = y[1];
+      if (!slug || seen[slug]) continue;
+      seen[slug] = true;
+      const from = y.index > 200 ? y.index - 200 : 0;
+      const chunk = full.slice(from, y.index + 1800);
+      let title = cleanTitle(((/<h3[^>]*>([^<]{2,220})/i.exec(chunk) || [])[1] || ""));
+      if (!title) title = cleanTitle(attrOf(chunk, "alt"));
+      if (!title) title = slug.replace(/-/g, " ");
+      let poster = cleanImg(attrOf(chunk, "data-src") || attrOf(chunk, "src"));
+      if (/capblank|anime\.png/i.test(poster)) poster = "";
+      const item = mkItem(slug, title, poster, false);
+      if (item) items.push(item);
+    }
   }
   return items;
 }
@@ -591,14 +624,18 @@ function serverLabel(s, all) {
 
 function jsUnpack(source) {
   try {
-    const m = /}\s*\(\s*'((?:\\'|[^'])*)'\s*,\s*(\d+)\s*,\s*(\d+)\s*,\s*'((?:\\'|[^'])*)'\s*\.split\s*\(\s*'\|'\s*\)/.exec(source);
+    const m =
+      /}\s*\(\s*'((?:\\'|[^'])*)'\s*,\s*(\d+)\s*,\s*(\d+)\s*,\s*'((?:\\'|[^'])*)'\s*\.split\s*\(\s*'\|'\s*\)/.exec(source) ||
+      /\}\('((?:\\'|[^'])*)',(\d+),(\d+),'((?:\\'|[^'])*)'\.split\('\|'\)/.exec(source);
     if (!m) return "";
     const payload = m[1].replace(/\\'/g, "'").replace(/\\\\/g, "\\");
     const radix = parseInt(m[2], 10);
     let count = parseInt(m[3], 10);
     const words = m[4].split("|");
     const trie = {};
-    while (count--) trie[count.toString(radix)] = words[count] || count.toString(radix);
+    for (let i = 0; i < count; i++) {
+      trie[i.toString(radix)] = words[i] || i.toString(radix);
+    }
     return payload.replace(/\b\w+\b/g, function (w) {
       return Object.prototype.hasOwnProperty.call(trie, w) ? trie[w] : w;
     });
@@ -617,17 +654,27 @@ function unpackAll(html) {
   return out;
 }
 function findStreamUrl(html) {
+  const src = String(html || "");
+  // MixDrop: MDCore.wurl="//cdn.../file.mp4?..."
+  let m = /MDCore\.wurl\s*=\s*["']([^"']+)["']/i.exec(src);
+  if (m && m[1] && /\.(mp4|m3u8)/i.test(m[1])) return unslash(m[1]);
+  m = /\bwurl\s*=\s*["']([^"']+)["']/i.exec(src);
+  if (m && m[1] && /\.(mp4|m3u8)/i.test(m[1])) return unslash(m[1]);
   const patterns = [
     /https?:\/\/[^"'\s<>]+\.m3u8[^"'\s<>]*/i,
     /https?:\/\/[^"'\s<>]+\.mp4[^"'\s<>]*/i,
+    /\/\/[a-z0-9.-]+\/[^"'\s<>]+\.m3u8[^"'\s<>]*/i,
+    /\/\/[a-z0-9.-]+\/[^"'\s<>]+\.mp4[^"'\s<>]*/i,
     /["'](https?:\/\/[^"']+\.m3u8[^"']*)["']/i,
     /["'](https?:\/\/[^"']+\.mp4[^"']*)["']/i,
-    /file\s*:\s*["'](https?:\/\/[^"']+)["']/i,
-    /src\s*:\s*["'](https?:\/\/[^"']+\.m3u8[^"']*)["']/i,
+    /["'](\/\/[^"']+\.m3u8[^"']*)["']/i,
+    /["'](\/\/[^"']+\.mp4[^"']*)["']/i,
+    /file\s*:\s*["']((?:https?:)?\/\/[^"']+)["']/i,
+    /src\s*:\s*["']((?:https?:)?\/\/[^"']+\.m3u8[^"']*)["']/i,
   ];
   for (let i = 0; i < patterns.length; i++) {
-    const m = patterns[i].exec(String(html || ""));
-    if (m) return unslash(m[1] || m[0]);
+    const mm = patterns[i].exec(src);
+    if (mm) return unslash(mm[1] || mm[0]);
   }
   return "";
 }
@@ -641,16 +688,24 @@ function goneIn(html) {
 async function packerStream(embed, label) {
   const page = await getPage(embed, { Referer: BASE + "/" });
   const html = page.html;
-  if (/just a moment|cf-browser-verification/i.test(html) && html.length < 12000) {
-    throw fail("unavailable", label + " bloqueado", "serverFailed");
+  if (/just a moment|cf-browser-verification|File was deleted/i.test(html) && html.length < 12000) {
+    throw fail("unavailable", label + (goneIn(html) ? " borrado" : " bloqueado"), "serverFailed");
   }
-  if (/filemoon|byse/i.test(label) && /type=["']module["']/.test(html) && !/\.m3u8/i.test(html)) {
+  if (/filemoon|byse/i.test(label) && /type=["']module["']/.test(html) && !/\.m3u8/i.test(html) && !/MDCore/i.test(html)) {
     throw fail("unavailable", "Filemoon protegido (SPA); prueba MixDrop o Mp4Upload", "serverFailed");
   }
+  const unpacked = unpackAll(html);
   let file = findStreamUrl(html);
-  if (!file) file = findStreamUrl(unpackAll(html));
+  if (!file) file = findStreamUrl(unpacked);
+  // Lulu/JW: sources:[{file:"https://...m3u8"}]
+  if (!file) {
+    const sm = /file\s*:\s*["']((?:https?:)?\/\/[^"']+)["']/i.exec(html + "\n" + unpacked);
+    if (sm) file = sm[1];
+  }
   if (!file) throw fail("unavailable", goneIn(html) ? label + " borrado" : label + " sin video", "serverFailed");
+  file = String(file).replace(/\\/g, "");
   if (file.indexOf("//") === 0) file = "https:" + file;
+  if (!/^https?:\/\//i.test(file)) throw fail("unavailable", label + " URL invalida", "serverFailed");
   return streamResult(file, originOf(page.url) + "/", label);
 }
 

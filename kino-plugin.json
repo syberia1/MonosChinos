@@ -1,7 +1,7 @@
 {
   "id": "monoschinos",
   "name": "MonosChinos",
-  "version": "2.4.0",
+  "version": "2.4.1",
   "apiVersion": 6,
   "entry": "plugin.js",
   "description": "Anime subtitulado de monoschinos.st con portadas, fondos y capitulos del sitio.",
@@ -34,7 +34,12 @@
     "vidhide.com",
     "vidhidepro.com",
     "hqq.tv",
-    "waaw.tv"
+    "waaw.tv",
+    "mxcontent.net",
+    "*.mxcontent.net",
+    "tnmr.org",
+    "*.tnmr.org",
+    "lulucdn.com"
   ],
   "streamHosts": "any",
   "capabilities": [
