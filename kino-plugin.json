@@ -1,15 +1,14 @@
 {
   "id": "monoschinos",
   "name": "MonosChinos",
-  "version": "1.5.0",
+  "version": "2.1.1",
   "apiVersion": 6,
   "entry": "plugin.js",
-  "description": "Anime subtitulado de MonosChinos2. Metadatos TMDB/AniList/MAL; servidores MixDrop, Mp4Upload, Voe, Netu y más.",
+  "description": "Anime subtitulado de monoschinos.st con portadas, sinopsis e imágenes del propio sitio.",
   "author": "tu-usuario-de-github",
   "hosts": [
-    "vww.monoschinos2.net",
-    "*.monoschinos2.net",
-    "monoschinos2.net"
+    "monoschinos.st",
+    "www.monoschinos.st"
   ],
   "fetchHosts": "any",
   "streamHosts": "any",
@@ -33,7 +32,7 @@
       "label": "Servidor preferido",
       "type": "select",
       "default": "mixdrop",
-      "hint": "MixDrop/Mp4Upload suelen ir mejor; Filemoon y StreamWish a menudo fallan.",
+      "hint": "Se intenta primero; el resto queda en el menú Servidor.",
       "options": [
         {
           "value": "mixdrop",
@@ -44,24 +43,24 @@
           "label": "Mp4Upload"
         },
         {
-          "value": "uqload",
-          "label": "Uqload"
-        },
-        {
           "value": "lulu",
           "label": "LuluStream"
-        },
-        {
-          "value": "vidhide",
-          "label": "Vidhide"
         },
         {
           "value": "voe",
           "label": "Voe"
         },
         {
-          "value": "yourupload",
-          "label": "YourUpload"
+          "value": "uqload",
+          "label": "Uqload"
+        },
+        {
+          "value": "vidhide",
+          "label": "Vidhide"
+        },
+        {
+          "value": "savefiles",
+          "label": "SaveFiles"
         },
         {
           "value": "dood",
@@ -78,6 +77,10 @@
         {
           "value": "netu",
           "label": "Netu"
+        },
+        {
+          "value": "hexload",
+          "label": "Hexload"
         }
       ]
     }
