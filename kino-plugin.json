@@ -1,10 +1,10 @@
 {
   "id": "monoschinos",
   "name": "MonosChinos",
-  "version": "2.1.1",
+  "version": "2.2.0",
   "apiVersion": 6,
   "entry": "plugin.js",
-  "description": "Anime subtitulado de monoschinos.st con portadas, sinopsis e imágenes del propio sitio.",
+  "description": "Anime subtitulado de monoschinos.st. Portadas, fondos y capitulos del propio sitio.",
   "author": "tu-usuario-de-github",
   "hosts": [
     "monoschinos.st",
@@ -32,7 +32,7 @@
       "label": "Servidor preferido",
       "type": "select",
       "default": "mixdrop",
-      "hint": "Se intenta primero; el resto queda en el menú Servidor.",
+      "hint": "Se intenta primero; el resto queda en el menu Servidor.",
       "options": [
         {
           "value": "mixdrop",
@@ -51,20 +51,20 @@
           "label": "Voe"
         },
         {
-          "value": "uqload",
-          "label": "Uqload"
-        },
-        {
-          "value": "vidhide",
-          "label": "Vidhide"
-        },
-        {
           "value": "savefiles",
           "label": "SaveFiles"
         },
         {
           "value": "dood",
           "label": "Doodstream"
+        },
+        {
+          "value": "uqload",
+          "label": "Uqload"
+        },
+        {
+          "value": "hexload",
+          "label": "Hexload"
         },
         {
           "value": "filemoon",
@@ -77,10 +77,6 @@
         {
           "value": "netu",
           "label": "Netu"
-        },
-        {
-          "value": "hexload",
-          "label": "Hexload"
         }
       ]
     }

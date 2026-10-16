@@ -1,5 +1,5 @@
-// MonosChinos para Kino — apiVersion 6 — https://monoschinos.st
-// Metadatos 100% del sitio (sin TMDB). QuickJS: sin URL/atob/TextDecoder/timers.
+// MonosChinos para Kino (apiVersion 6) - https://monoschinos.st
+// Metadatos del propio sitio. Compatible con QuickJS (sin URL/atob/TextDecoder/timers).
 
 const BASE = "https://monoschinos.st";
 const UA =
@@ -8,21 +8,21 @@ const ID_OK = /^[A-Za-z0-9._~-]{1,128}$/;
 
 const TXT = {
   notFound: { es: "No encontramos esto en el sitio.", en: "We could not find this on the site." },
-  siteDown: { es: "El sitio no responde ahora. Intenta más tarde.", en: "The site is not answering now. Try again later." },
+  siteDown: { es: "El sitio no responde ahora. Intenta mas tarde.", en: "The site is not answering now. Try again later." },
   noServers: {
-    es: "Este capítulo no tiene servidores reproducibles.",
+    es: "Este capitulo no tiene servidores reproducibles.",
     en: "This episode has no playable servers.",
   },
   serverFailed: {
-    es: "No se pudo abrir el video en ese servidor. Prueba otro en el menú Servidor.",
+    es: "No se pudo abrir el video en ese servidor. Prueba otro en el menu Servidor.",
     en: "The video could not be opened on that server. Try another one in the Servidor menu.",
   },
-  badRef: { es: "Este título ya no es válido. Búscalo otra vez.", en: "This title is no longer valid. Search for it again." },
+  badRef: { es: "Este titulo ya no es valido. Buscalo otra vez.", en: "This title is no longer valid. Search for it again." },
   noEpisodes: {
-    es: "MonosChinos no pudo cargar los capítulos.",
+    es: "MonosChinos no pudo cargar los capitulos.",
     en: "MonosChinos could not load the episodes.",
   },
-  episode: { es: "Capítulo ", en: "Episode " },
+  episode: { es: "Capitulo ", en: "Episode " },
 };
 
 function lang() {
@@ -39,13 +39,13 @@ function reasonOf(e) {
   if (/borrad|deleted|not found|removed|HTTP 404/i.test(m)) return lang() === "en" ? "video removed" : "video borrado";
   const h = /HTTP (\d{3})/.exec(m);
   if (h) return "HTTP " + h[1];
-  if (/timeout|tardó|took too long/i.test(m)) return lang() === "en" ? "timed out" : "tardó demasiado";
+  if (/timeout|tardo|took too long/i.test(m)) return lang() === "en" ? "timed out" : "tardo demasiado";
   if (/sin video/i.test(m)) return lang() === "en" ? "no video found" : "sin video";
   if (/SPA|protegido/i.test(m)) return m.slice(0, 80);
-  return lang() === "en" ? "failed" : "falló";
+  return lang() === "en" ? "failed" : "fallo";
 }
 
-// ---------- Utilidades ----------
+// ---------- Utils ----------
 
 function b64bytes(s) {
   s = String(s || "").replace(/-/g, "+").replace(/_/g, "/").replace(/[^A-Za-z0-9+/=]/g, "");
@@ -113,7 +113,9 @@ function decodeHtml(s) {
     .replace(/&#x27;/gi, "'")
     .replace(/&lt;/g, "<")
     .replace(/&gt;/g, ">")
-    .replace(/&#(\d+);/g, (_, n) => String.fromCharCode(parseInt(n, 10)))
+    .replace(/&#(\d+);/g, function (_, n) {
+      return String.fromCharCode(parseInt(n, 10));
+    })
     .replace(/&nbsp;/g, " ");
 }
 function attrOf(chunk, name) {
@@ -135,31 +137,19 @@ function cleanImg(u) {
   return u.replace(/\?v=\d+/g, "").replace(/\?t=[^&]+/g, "");
 }
 
-// Póster vertical (imagen) → fondo horizontal (portada) del CDN del sitio.
-// imagen:  .../assets/img/serie/imagen/NAME[-T1]-ID.jpg
-// thumbs:  .../assets/thumbs/imagen/NAME-ID.jpg.webp
-// portada: .../assets/img/serie/portada/NAME-portada-ID.jpg
+// Poster vertical -> fondo horizontal del CDN
+// imagen:  /assets/img/serie/imagen/NAME-T1-ID.jpg  o  NAME-ID.jpg
+// portada: /assets/img/serie/portada/NAME-portada-ID.jpg
 function posterToBackdrop(poster) {
   const u = String(poster || "");
-  // Ya es portada
-  let m = /\/assets\/(?:img\/serie|thumbs)\/portada\/([^/?#]+)/i.exec(u);
+  let m = /\/assets\/(?:img\/serie|thumbs)\/imagen\/([^\/?#]+?)-(\d+)\.(?:jpg|jpeg|png|webp)/i.exec(u);
   if (m) {
-    const name = m[1].replace(/\.webp$/i, "").replace(/\.jpg$/i, "");
-    return BASE + "/assets/img/serie/portada/" + name + (name.endsWith(".jpg") ? "" : ".jpg");
+    let name = m[1].replace(/-T\d+$/i, "");
+    return BASE + "/assets/img/serie/portada/" + name + "-portada-" + m[2] + ".jpg";
   }
-  // Desde imagen (poster vertical)
-  m = /\/assets\/(?:img\/serie|thumbs)\/imagen\/([^/?#]+?)(?:-T\d+)?-(\d+)\.(?:jpg|jpeg|png|webp)/i.exec(u);
-  if (m) {
-    return BASE + "/assets/img/serie/portada/" + m[1] + "-portada-" + m[2] + ".jpg";
-  }
-  // Desde thumbs/portada del capítulo
-  m = /\/assets\/thumbs\/portada\/([^/?#]+?)(?:\.jpg)?(?:\.webp)?/i.exec(u);
+  m = /\/assets\/thumbs\/portada\/([^\/?#]+)/i.exec(u);
   if (m) {
     let name = m[1].replace(/\.webp$/i, "").replace(/\.jpg$/i, "");
-    if (!/-portada-\d+$/i.test(name)) {
-      // por si viene sin -portada-id
-      return BASE + "/assets/img/serie/portada/" + name + ".jpg";
-    }
     return BASE + "/assets/img/serie/portada/" + name + ".jpg";
   }
   return "";
@@ -181,13 +171,14 @@ function cacheGet(key) {
 }
 function cacheSet(key, value, ttlMs) {
   try {
-    kino.storage.set(key, value, ttlMs ? { ttlMs: ttlMs } : undefined);
+    if (ttlMs) kino.storage.set(key, value, { ttlMs: ttlMs });
+    else kino.storage.set(key, value);
   } catch (e) {
-    /* lleno */
+    /* full */
   }
 }
 
-// ---------- Tarjetas del catálogo ----------
+// ---------- Cards ----------
 
 function slugFromAnimeUrl(href) {
   const m = /\/anime\/([^/?#"']+)/.exec(String(href || ""));
@@ -195,7 +186,8 @@ function slugFromAnimeUrl(href) {
 }
 function slugFromVerUrl(href) {
   const m = /\/ver\/([^/?#"']+)-episodio-(\d+)/.exec(String(href || ""));
-  return m ? { slug: m[1], num: parseInt(m[2], 10) } : null;
+  if (!m) return null;
+  return { slug: m[1], num: parseInt(m[2], 10) };
 }
 
 function mkItem(slug, title, poster, movie) {
@@ -209,14 +201,13 @@ function mkItem(slug, title, poster, movie) {
   };
 }
 
-/** Fichas /anime/slug — un resultado por slug. */
 function cardsAnime(html) {
   const items = [];
   const seen = {};
-  const re = /href=(["'])([^"']*\/anime\/([^"'/?#]+))\1/gi;
+  const re = /href=["']([^"']*\/anime\/([^"'/?#]+))["']/gi;
   let x;
   while ((x = re.exec(html))) {
-    const slug = x[3];
+    const slug = x[2];
     if (!slug || seen[slug]) continue;
     seen[slug] = true;
     const chunk = html.slice(Math.max(0, x.index - 40), Math.min(html.length, x.index + 1600));
@@ -227,32 +218,33 @@ function cardsAnime(html) {
       else poster = "";
     }
     poster = cleanImg(poster);
-    let title =
-      cleanTitle(attrOf(chunk, "alt")) ||
-      cleanTitle((/<h3[^>]*>([^<]+)/i.exec(chunk) || [])[1] || "") ||
-      slug.replace(/-/g, " ");
+    let title = cleanTitle(attrOf(chunk, "alt"));
+    if (!title) {
+      const h3 = /<h3[^>]*>([^<]+)/i.exec(chunk);
+      if (h3) title = cleanTitle(h3[1]);
+    }
+    if (!title) title = slug.replace(/-/g, " ");
     const item = mkItem(slug, title, poster, /pelicula|movie/i.test(slug));
     if (item) items.push(item);
   }
   return items;
 }
 
-/** Últimos capítulos → una ficha por anime (slug). */
 function cardsEpisodes(html) {
   const items = [];
   const seen = {};
-  const re = /href=(["'])([^"']*\/ver\/([^"'/?#]+)-episodio-(\d+))\1/gi;
+  const re = /href=["']([^"']*\/ver\/([^"'/?#]+)-episodio-(\d+))["']/gi;
   let x;
   while ((x = re.exec(html))) {
-    const slug = x[3];
+    const slug = x[2];
     if (!slug || seen[slug]) continue;
     seen[slug] = true;
     const chunk = html.slice(Math.max(0, x.index - 40), Math.min(html.length, x.index + 1600));
-    let title =
-      cleanTitle((/<h3[^>]*>([^<]+)/i.exec(chunk) || [])[1] || "") ||
-      cleanTitle(attrOf(chunk, "alt")) ||
-      slug.replace(/-/g, " ");
-    // Miniatura del capítulo del home; si es portada horizontal sirve como poster temporal
+    let title = "";
+    const h3 = /<h3[^>]*>([^<]+)/i.exec(chunk);
+    if (h3) title = cleanTitle(h3[1]);
+    if (!title) title = cleanTitle(attrOf(chunk, "alt"));
+    if (!title) title = slug.replace(/-/g, " ");
     let poster = cleanImg(attrOf(chunk, "data-src") || attrOf(chunk, "src"));
     if (/capblank|anime\.png/i.test(poster)) poster = "";
     const item = mkItem(slug, title, poster, false);
@@ -273,31 +265,41 @@ function hasNextPage(html, page) {
 export async function search(query) {
   const q = cleanQuery(query && query.q);
   if (q.length < 2) return [];
-  const page = await getPage(BASE + "/buscar?q=" + encodeURIComponent(q));
-  let items = cardsAnime(page.html).slice(0, 40);
-  if (items.length) return items;
-  // Autocompletado AJAX
+  try {
+    const page = await getPage(BASE + "/buscar?q=" + encodeURIComponent(q));
+    const items = cardsAnime(page.html).slice(0, 40);
+    if (items.length) return items;
+  } catch (e) {
+    kino.log("search page: " + ((e && e.message) || e));
+  }
+  // Fallback: autocomplete JSON
   try {
     const r = await kino.fetch(BASE + "/buscar_ajax?q=" + encodeURIComponent(q), {
       headers: { "User-Agent": UA, "X-Requested-With": "XMLHttpRequest", Accept: "application/json" },
       timeoutMs: 10000,
     });
-    if (r.ok) {
-      const data = JSON.parse(r.text || "[]");
-      const seen = {};
-      items = [];
-      for (const row of data) {
-        const slug = slugFromAnimeUrl(row.url || "");
-        if (!slug || seen[slug]) continue;
-        seen[slug] = true;
-        const item = mkItem(slug, row.nombre || slug, row.thumb ? cleanImg(row.thumb) : "", /pelicula/i.test(row.categoria || ""));
-        if (item) items.push(item);
-      }
+    if (!r.ok) return [];
+    const text = String(r.text || "").trim();
+    if (!text || text.charAt(0) !== "[") {
+      kino.log("search ajax: respuesta no JSON");
+      return [];
     }
+    const data = JSON.parse(text);
+    const seen = {};
+    const items = [];
+    for (let i = 0; i < data.length; i++) {
+      const row = data[i];
+      const slug = slugFromAnimeUrl(row.url || "");
+      if (!slug || seen[slug]) continue;
+      seen[slug] = true;
+      const item = mkItem(slug, row.nombre || slug, row.thumb ? cleanImg(row.thumb) : "", /pelicula/i.test(row.categoria || ""));
+      if (item) items.push(item);
+    }
+    return items.slice(0, 40);
   } catch (e) {
-    kino.log("search ajax: " + (e && e.message));
+    kino.log("search ajax: " + ((e && e.message) || e));
+    return [];
   }
-  return items.slice(0, 40);
 }
 
 function savedRow(id) {
@@ -312,52 +314,52 @@ function savedRow(id) {
   return null;
 }
 function saveRow(row) {
-  try {
-    cacheSet("row:" + row.id, JSON.stringify({ t: Date.now(), row: row }), 12 * 3600000);
-  } catch (e) {
-    /* ignore */
-  }
+  cacheSet("row:" + row.id, JSON.stringify({ t: Date.now(), row: row }), 12 * 3600000);
 }
 async function loadRow(id, title, fetchFn) {
   const cached = savedRow(id);
   if (cached) return cached;
   const items = await fetchFn();
-  const row = { id: id, title: title, items: items };
+  const row = { id: id, title: title, items: items || [] };
   saveRow(row);
   return row;
 }
 
 export async function home() {
   const rows = [];
+  let homeHtml = "";
   try {
-    const row = await loadRow("ultimos", "Últimos capítulos", async () => {
-      const page = await getPage(BASE + "/");
-      return cardsEpisodes(page.html).slice(0, 24);
-    });
-    if (row.items && row.items.length) rows.push(row);
+    const page = await getPage(BASE + "/");
+    homeHtml = page.html || "";
   } catch (e) {
-    kino.log("home ultimos: " + (e && e.message));
+    kino.log("home: " + ((e && e.message) || e));
+    return rows;
   }
+
   try {
-    const row = await loadRow("recientes", "Series recientes", async () => {
-      const page = await getPage(BASE + "/");
-      const idx = page.html.indexOf("Series recientes");
-      const html = idx >= 0 ? page.html.slice(idx, idx + 50000) : page.html;
-      return cardsAnime(html).slice(0, 24);
-    });
-    if (row.items && row.items.length) rows.push(row);
+    const items = cardsEpisodes(homeHtml).slice(0, 24);
+    if (items.length) rows.push({ id: "ultimos", title: "Ultimos capitulos", items: items });
   } catch (e) {
-    kino.log("home recientes: " + (e && e.message));
+    kino.log("home ultimos: " + ((e && e.message) || e));
   }
+
   try {
-    const row = await loadRow("emision", "En emisión", async () => {
-      const page = await getPage(BASE + "/animes?estado=en+emision");
-      return cardsAnime(page.html).slice(0, 24);
-    });
-    if (row.items && row.items.length) rows.push(row);
+    const idx = homeHtml.indexOf("Series recientes");
+    const slice = idx >= 0 ? homeHtml.slice(idx, idx + 50000) : homeHtml;
+    const items = cardsAnime(slice).slice(0, 24);
+    if (items.length) rows.push({ id: "recientes", title: "Series recientes", items: items });
   } catch (e) {
-    kino.log("home emision: " + (e && e.message));
+    kino.log("home recientes: " + ((e && e.message) || e));
   }
+
+  try {
+    const page = await getPage(BASE + "/animes?estado=en+emision");
+    const items = cardsAnime(page.html).slice(0, 24);
+    if (items.length) rows.push({ id: "emision", title: "En emision", items: items });
+  } catch (e) {
+    kino.log("home emision: " + ((e && e.message) || e));
+  }
+
   return rows;
 }
 
@@ -373,9 +375,7 @@ export async function browse(ref, cursor) {
   return { items: items, next: next };
 }
 
-// ---------- Episodios (solo datos del sitio) ----------
-// data-ajax → {eps, perpage, paginate_url}
-// paginate_url?p=N → {caps:[{episodio,url,thumb}]}
+// ---------- Episodes ----------
 
 async function fetchCaplistMeta(ajaxUrl) {
   const r = await kino.fetch(ajaxUrl, {
@@ -388,11 +388,11 @@ async function fetchCaplistMeta(ajaxUrl) {
     timeoutMs: 12000,
   });
   if (!r.ok) throw fail("unavailable", "HTTP " + r.status + " caplist", "siteDown");
-  try {
-    return JSON.parse(r.text || "{}");
-  } catch (e) {
-    throw fail("unavailable", "caplist JSON inválido", "noEpisodes");
+  const text = String(r.text || "").trim();
+  if (!text || (text.charAt(0) !== "{" && text.charAt(0) !== "[")) {
+    throw fail("unavailable", "caplist no JSON", "noEpisodes");
   }
+  return JSON.parse(text);
 }
 
 async function fetchCapsPage(paginateUrl, pageNum) {
@@ -408,24 +408,25 @@ async function fetchCapsPage(paginateUrl, pageNum) {
   });
   if (!r.ok) return [];
   try {
-    return (JSON.parse(r.text || "{}").caps) || [];
+    const text = String(r.text || "").trim();
+    if (!text || text.charAt(0) !== "{") return [];
+    const data = JSON.parse(text);
+    return data.caps || [];
   } catch (e) {
     return [];
   }
 }
 
-/** Extrae título, sinopsis, póster y géneros de la ficha HTML. */
 function parseSeriesHtml(html, slug) {
-  const series = { title: "", poster: "", backdrop: "", overview: "", genres: [] };
+  const series = { title: "", poster: "", backdrop: "", overview: "" };
 
-  // Título
   const h1m = /<h1[^>]*>([\s\S]*?)<\/h1>/i.exec(html);
   if (h1m) series.title = decodeHtml(h1m[1].replace(/<[^>]+>/g, "")).replace(/\s+/g, " ").trim();
   if (!series.title) {
     const ogt = /property=["']og:title["'][^>]*content=["']([^"']+)["']/i.exec(html);
     if (ogt) {
       series.title = decodeHtml(ogt[1])
-        .replace(/\s*Sub Español.*$/i, "")
+        .replace(/\s*Sub Espa.ol.*$/i, "")
         .replace(/\s*Online.*$/i, "")
         .replace(/\s*-\s*MonosChinos.*$/i, "")
         .trim();
@@ -433,86 +434,57 @@ function parseSeriesHtml(html, slug) {
   }
   if (!series.title) series.title = slug.replace(/-/g, " ");
 
-  // Póster vertical: og:image o thumbs/imagen
   const ogi = /property=["']og:image["'][^>]*content=["']([^"']+)["']/i.exec(html);
   if (ogi) series.poster = cleanImg(ogi[1]);
   if (!series.poster) {
     const ds = /data-src=["']([^"']*\/assets\/thumbs\/imagen\/[^"']+)["']/i.exec(html);
     if (ds) series.poster = cleanImg(ds[1]);
   }
-  // Fondo: si la ficha ya trae /portada/ en algún img, usarla
-  const portada = /(?:src|data-src)=["']([^"']*\/assets\/(?:img\/serie|thumbs)\/portada\/[^"']+)["']/i.exec(html);
-  if (portada) series.backdrop = cleanImg(portada[1]).replace(/\.webp$/i, "").replace("/thumbs/portada/", "/img/serie/portada/");
-  // Fondo horizontal del carrusel/hero si aún no se encontró
-  if (!series.backdrop && series.poster) {
-    const bd = posterToBackdrop(series.poster);
-    series.backdrop = bd || series.poster;
-  }
-  if (!series.backdrop && series.poster) series.backdrop = series.poster;
 
-  // Sinopsis: párrafo bajo "Sinopsis" / "Sobre la serie"
+  // Fondo horizontal
+  const bd = posterToBackdrop(series.poster);
+  if (bd) series.backdrop = bd;
+  else if (series.poster) series.backdrop = series.poster;
+
   const sin =
     /Sinopsis[\s\S]{0,200}<p[^>]*>([^<]{20,1200})<\/p>/i.exec(html) ||
     /Sobre la serie[\s\S]{0,200}<p[^>]*>([^<]{20,1200})<\/p>/i.exec(html);
   if (sin) {
     series.overview = decodeHtml(sin[1]).replace(/\s+/g, " ").trim().slice(0, 2000);
   } else {
-    // Fallback: meta description sin el relleno SEO inicial
     const ogd =
       /property=["']og:description["'][^>]*content=["']([^"']+)["']/i.exec(html) ||
       /name=["']description["'][^>]*content=["']([^"']+)["']/i.exec(html);
     if (ogd) {
       let text = decodeHtml(ogd[1]);
-      // "Ver TITLE online sub español gratis en MonosChinos. SINOPSIS REAL"
-      const cut = text.split(/\.\s+/);
-      if (cut.length >= 2) {
-        // quitar la primera frase SEO
-        text = cut.slice(1).join(". ").trim();
-      }
-      text = text
-        .replace(/^Ver[\s\S]*?MonosChinos\.?\s*/i, "")
-        .replace(/\s+/g, " ")
-        .trim();
+      const parts = text.split(/\.\s+/);
+      if (parts.length >= 2) text = parts.slice(1).join(". ").trim();
+      text = text.replace(/^Ver[\s\S]*?MonosChinos\.?\s*/i, "").replace(/\s+/g, " ").trim();
       if (text.length >= 40) series.overview = text.slice(0, 2000);
     }
   }
 
-  // Géneros (chips o enlaces)
-  const gset = [];
+  const genres = [];
   const reG = /href=["'][^"']*(?:genero|genre|tag)[^"']*["'][^>]*>([^<]+)/gi;
   let g;
   while ((g = reG.exec(html))) {
     const name = decodeHtml(g[1]).replace(/\s+/g, " ").trim();
-    if (name && name.length < 40 && gset.indexOf(name) < 0) gset.push(name);
+    if (name && name.length < 40 && genres.indexOf(name) < 0) genres.push(name);
   }
-  // chips en el hero: spans pequeños de género
-  if (!gset.length) {
-    const reChip = /rounded-full[^>]*>(Acción|Aventura|Comedia|Drama|Fantas[ií]a|Horror|Romance|Ciencia Ficci[oó]n|Sobrenatural|Escolares|Militar|Mecha|Deportes|Misterio|Psicol[oó]gico|Thriller|Gore|Ecchi|Harem|Magia|Hist[oó]rico|M[uú]sica|Seinen|Shounen|Shoujo|Josei)[^<]*</gi;
-    let c;
-    while ((c = reChip.exec(html))) {
-      const name = c[1];
-      if (gset.indexOf(name) < 0) gset.push(name);
-    }
-  }
-  if (gset.length) series.genres = gset.slice(0, 5);
-
-  // Año desde "Temporada" / "Emisión"
-  const y =
-    /Emisi[oó]n<\/dt>\s*<dd[^>]*>[^<]*?(20\d{2})/i.exec(html) ||
-    /Temporada<\/dt>\s*<dd[^>]*>[^<]*?(20\d{2})/i.exec(html);
-  if (y) series.year = y[1];
+  if (genres.length) series.genres = genres.slice(0, 5);
 
   return series;
 }
 
 export async function episodes(ref) {
   const T = Date.now();
-  const left = () => 18500 - (Date.now() - T);
+  const left = function () {
+    return 18500 - (Date.now() - T);
+  };
   const m = /^a:([A-Za-z0-9._~-]+)$/.exec(String(ref || ""));
-  if (!m) throw fail("not_found", "ref inválido: " + ref, "badRef");
+  if (!m) throw fail("not_found", "ref invalido: " + ref, "badRef");
   const slug = m[1];
 
-  // 1) Ficha HTML
   let html = "";
   try {
     const page = await getPage(BASE + "/anime/" + slug, null, 14000);
@@ -523,15 +495,10 @@ export async function episodes(ref) {
 
   const series = parseSeriesHtml(html, slug);
 
-  // 2) Lista de capítulos vía data-ajax
   const ajaxM =
-    /class=["'][^"']*caplist[^"']*["'][^>]*data-ajax=["']([^"']+)["']/i.exec(html) ||
-    /data-ajax=["']([^"']+)["'][^>]*class=["'][^"']*caplist/i.exec(html) ||
-    /data-ajax=["']([^"']*ajax\/ajax_pagination\/\d+)["']/i.exec(html);
-
-  if (!ajaxM) {
-    throw fail("not_found", "sin data-ajax en " + slug, "noEpisodes");
-  }
+    /data-ajax=["']([^"']*ajax\/ajax_pagination\/\d+)["']/i.exec(html) ||
+    /data-ajax=["']([^"']+)["']/i.exec(html);
+  if (!ajaxM) throw fail("not_found", "sin data-ajax en " + slug, "noEpisodes");
 
   const ajaxUrl = abs(ajaxM[1]);
   kino.log("episodes: " + slug + " ajax=" + ajaxUrl);
@@ -549,14 +516,14 @@ export async function episodes(ref) {
   const total = epsMeta.length;
   kino.log("episodes: total=" + total + " perpage=" + perpage);
 
-  let caps = [];
+  const caps = [];
   if (paginateUrl && total > 0) {
     const pages = Math.max(1, Math.ceil(total / perpage));
     const maxPages = Math.min(pages, 10);
     for (let p = 1; p <= maxPages && left() > 2000; p++) {
       try {
         const chunk = await fetchCapsPage(paginateUrl, p);
-        for (const c of chunk) caps.push(c);
+        for (let i = 0; i < chunk.length; i++) caps.push(chunk[i]);
       } catch (e) {
         kino.log("caps p" + p + ": " + ((e && e.message) || e));
       }
@@ -567,25 +534,25 @@ export async function episodes(ref) {
   const seen = {};
 
   if (caps.length) {
-    for (const c of caps) {
+    for (let i = 0; i < caps.length; i++) {
+      const c = caps[i];
       const n = parseInt(c.episodio, 10);
       if (!n || seen[n]) continue;
       seen[n] = true;
       let epSlug = slug;
       const ver = slugFromVerUrl(c.url || "");
       if (ver && ver.slug) epSlug = ver.slug;
-      const still = c.thumb ? cleanImg(c.thumb) : "";
       list.push({
         season: 1,
         number: n,
         ref: "e:" + epSlug + ":" + n,
         title: t("episode") + n,
-        still: still,
+        still: c.thumb ? cleanImg(c.thumb) : series.poster || "",
       });
     }
-  } else if (epsMeta.length) {
-    for (const e of epsMeta) {
-      const n = parseInt(e.num, 10);
+  } else {
+    for (let i = 0; i < epsMeta.length; i++) {
+      const n = parseInt(epsMeta[i].num, 10);
       if (!n || seen[n]) continue;
       seen[n] = true;
       list.push({
@@ -593,27 +560,21 @@ export async function episodes(ref) {
         number: n,
         ref: "e:" + slug + ":" + n,
         title: t("episode") + n,
+        still: series.poster || "",
       });
     }
   }
 
-  if (!list.length) {
-    throw fail("not_found", "0 capítulos para " + slug, "noEpisodes");
-  }
-  list.sort((a, b) => a.number - b.number);
+  if (!list.length) throw fail("not_found", "0 capitulos para " + slug, "noEpisodes");
+  list.sort(function (a, b) {
+    return a.number - b.number;
+  });
 
-  // Si algún capítulo no tiene still, usar el póster de la serie
-  if (series.poster) {
-    for (const ep of list) {
-      if (!ep.still) ep.still = series.poster;
-    }
-  }
-
-  kino.log("episodes OK: " + slug + " → " + list.length + " caps | poster=" + (series.poster ? "sí" : "no"));
+  kino.log("episodes OK: " + slug + " -> " + list.length);
   return { series: series, episodes: list };
 }
 
-// ---------- Servidores ----------
+// ---------- Servers ----------
 
 const KIND_LABEL = {
   voe: "Voe",
@@ -642,11 +603,11 @@ function detectKind(name, url) {
   if (/uqload/i.test(n) || /uqload\./i.test(u)) return "uqload";
   if (/vidhide|streamhide/i.test(n) || /vidhide|streamhide/i.test(u)) return "vidhide";
   if (/savefiles?|streamhls/i.test(n) || /savefiles?\.|streamhls\./i.test(u)) return "savefiles";
+  if (/hexload/i.test(n) || /hexload\./i.test(u)) return "hexload";
   if (/dood|dsvplay/i.test(n) || /dood|dsvplay\./i.test(u)) return "dood";
   if (/filemoon|byse/i.test(n) || /filemoon|byse/i.test(u)) return "filemoon";
-  if (/streamwish|wish/i.test(n) || /streamwish|wish\./i.test(u)) return "streamwish";
+  if (/streamwish|\bwish\b/i.test(n) || /streamwish|wish\./i.test(u)) return "streamwish";
   if (/netu|hqq|waaw/i.test(n) || /hqq\.|waaw\.|netu\./i.test(u)) return "netu";
-  if (/hexload/i.test(n) || /hexload\./i.test(u)) return "hexload";
   if (/yourupload/i.test(n) || /yourupload\./i.test(u)) return "yourupload";
   if (/mega/i.test(n) || /mega\.nz/i.test(u)) return "mega";
   return "generic";
@@ -673,25 +634,33 @@ function listServers(html) {
     mp4upload: 2,
     lulu: 3,
     voe: 4,
-    uqload: 5,
-    vidhide: 6,
-    savefiles: 7,
-    hexload: 7,
+    savefiles: 5,
+    hexload: 6,
+    uqload: 7,
     dood: 8,
     netu: 10,
     generic: 15,
     filemoon: 18,
     streamwish: 19,
   };
-  servers.sort((a, b) => (orderMap[a.kind] || 15) - (orderMap[b.kind] || 15));
+  servers.sort(function (a, b) {
+    return (orderMap[a.kind] || 15) - (orderMap[b.kind] || 15);
+  });
   return servers;
 }
 
 function serverLabel(s, all) {
   const base = KIND_LABEL[s.kind] || s.name || "Servidor";
-  const same = all.filter((x) => x.kind === s.kind);
-  if (same.length <= 1) return base;
-  return base + " " + (same.indexOf(s) + 1);
+  let count = 0;
+  let idx = 0;
+  for (let i = 0; i < all.length; i++) {
+    if (all[i].kind === s.kind) {
+      count++;
+      if (all[i] === s) idx = count;
+    }
+  }
+  if (count <= 1) return base;
+  return base + " " + idx;
 }
 
 function jsUnpack(source) {
@@ -704,7 +673,9 @@ function jsUnpack(source) {
     const words = m[4].split("|");
     const trie = {};
     while (count--) trie[count.toString(radix)] = words[count] || count.toString(radix);
-    return payload.replace(/\b\w+\b/g, (w) => (trie.hasOwnProperty(w) ? trie[w] : w));
+    return payload.replace(/\b\w+\b/g, function (w) {
+      return trie.hasOwnProperty(w) ? trie[w] : w;
+    });
   } catch (e) {
     return "";
   }
@@ -728,8 +699,8 @@ function findStreamUrl(html) {
     /file\s*:\s*["'](https?:\/\/[^"']+)["']/i,
     /src\s*:\s*["'](https?:\/\/[^"']+\.m3u8[^"']*)["']/i,
   ];
-  for (const re of patterns) {
-    const m = re.exec(html);
+  for (let i = 0; i < patterns.length; i++) {
+    const m = patterns[i].exec(html);
     if (m) return unslash(m[1] || m[0]);
   }
   return "";
@@ -741,12 +712,9 @@ function goneIn(html) {
   return /File Not Found|deleted|not found|removed|no (longer|existe)|expirad/i.test(html || "");
 }
 
-function voeExtract(html) {
-  return findStreamUrl(html) || findStreamUrl(unpackAll(html));
-}
 async function voeStream(embed) {
   const page = await getPage(embed, { Referer: BASE + "/" });
-  const file = voeExtract(page.html);
+  const file = findStreamUrl(page.html) || findStreamUrl(unpackAll(page.html));
   if (!file) throw fail("unavailable", goneIn(page.html) ? "Voe borrado" : "Voe sin video", "serverFailed");
   return streamResult(file, originOf(page.url) + "/", "Voe");
 }
@@ -770,7 +738,7 @@ async function packerStream(embed, label) {
 function randomAlpha(n) {
   const abc = "abcdefghijklmnopqrstuvwxyz";
   let s = "";
-  for (let i = 0; i < n; i++) s += abc.charAt(Math.floor(Math.random() * abc.length));
+  for (let i = 0; i < n; i++) s += abc.charAt(Math.floor(Math.random() * 26));
   return s;
 }
 async function doodStream(embed) {
@@ -780,7 +748,8 @@ async function doodStream(embed) {
   const pass = await getPage(originOf(page.url) + "/pass_md5/" + m[1], { Referer: page.url });
   const token = String(pass.html || "").trim();
   if (!token || token.length > 500) throw fail("unavailable", "Dood sin token", "serverFailed");
-  const file = token + randomAlpha(10) + "?token=" + (m[1].split("/").pop() || "") + "&expiry=" + Date.now();
+  const parts = m[1].split("/");
+  const file = token + randomAlpha(10) + "?token=" + (parts[parts.length - 1] || "") + "&expiry=" + Date.now();
   return streamResult(file.indexOf("http") === 0 ? file : originOf(page.url) + file, originOf(page.url) + "/", "Doodstream");
 }
 
@@ -842,7 +811,9 @@ function parseRef(ref) {
 
 export async function resolve(ref) {
   const T = Date.now();
-  const left = () => 18500 - (Date.now() - T);
+  const left = function () {
+    return 18500 - (Date.now() - T);
+  };
   const p = parseRef(ref);
   if (!p || p.type !== "ep") throw fail("not_found", "ref " + ref, "badRef");
 
@@ -853,7 +824,7 @@ export async function resolve(ref) {
   try {
     const pref = kino.config && kino.config.server;
     if (pref) {
-      servers.sort((a, b) => {
+      servers.sort(function (a, b) {
         if (a.kind === pref && b.kind !== pref) return -1;
         if (b.kind === pref && a.kind !== pref) return 1;
         return 0;
@@ -863,7 +834,7 @@ export async function resolve(ref) {
     /* ignore */
   }
 
-  kino.log("resolve: " + p.slug + "-" + p.num + " servidores: " + (servers.map((s) => s.name).join(", ") || "ninguno"));
+  kino.log("resolve: " + p.slug + "-" + p.num + " servidores: " + (servers.map(function (s) { return s.name; }).join(", ") || "ninguno"));
 
   if (!servers.length) throw fail("not_found", "sin servidores reproducibles", "noServers");
 
@@ -871,8 +842,9 @@ export async function resolve(ref) {
   const errors = [];
   let primary = null;
 
-  for (const s of servers) {
+  for (let i = 0; i < servers.length; i++) {
     if (left() < 2500) break;
+    const s = servers[i];
     try {
       const stream = await streamFor(s);
       if (!stream || !stream.url) continue;
@@ -885,17 +857,19 @@ export async function resolve(ref) {
       else alts.push(entry);
     } catch (e) {
       errors.push((KIND_LABEL[s.kind] || s.name) + ": " + reasonOf(e));
-      kino.log("resolve: " + s.kind + " falló: " + ((e && e.message) || e));
+      kino.log("resolve: " + s.kind + " fallo: " + ((e && e.message) || e));
     }
   }
 
   if (!primary) {
-    throw fail("unavailable", "ningún servidor abrió (" + errors.slice(0, 4).join("; ") + ")", "serverFailed");
+    throw fail("unavailable", "ningun servidor abrio (" + errors.slice(0, 4).join("; ") + ")", "serverFailed");
   }
 
   return {
     url: primary.url,
     headers: primary.headers,
-    alts: alts.map((a) => ({ url: a.url, name: a.name, headers: a.headers })),
+    alts: alts.map(function (a) {
+      return { url: a.url, name: a.name, headers: a.headers };
+    }),
   };
 }
