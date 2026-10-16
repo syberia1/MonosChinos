@@ -1106,6 +1106,121 @@ async function episodeExtras(slug, title, year, maxNum) {
   return extras;
 }
 
+
+// ---------- Ficha del anime y lista de capítulos (MonosChinos) ----------
+
+function parseAnimePage(html, slug) {
+  const info = {};
+  const h1 = kino.html.select(html, "h1")[0];
+  if (h1 && h1.text.trim()) info.title = h1.text.replace(/\s+/g, " ").trim().slice(0, 200);
+  if (!info.title) info.title = slug.replace(/-/g, " ");
+
+  // Portada
+  const og = kino.html.select(html, "meta[property=og:image]")[0];
+  if (og && og.attrs.content) info.poster = abs(og.attrs.content);
+  if (!info.poster) {
+    const m = /data-src=["']([^"']*cdn\/img\/anime\/[^"']+)["']/i.exec(html);
+    if (m) info.poster = abs(m[1]);
+  }
+  if (!info.poster) info.poster = posterFromSlug(slug, true);
+  if (info.poster) info.poster = String(info.poster).replace(/\?t=[^&]+/, "");
+
+  // Sinopsis (meta description suele ser SEO; limpiar)
+  const ogd = kino.html.select(html, "meta[property=og:description]")[0] || kino.html.select(html, "meta[name=description]")[0];
+  if (ogd && ogd.attrs.content) {
+    let raw = ogd.attrs.content;
+    let text = raw
+      .replace(/^ver online[\s\S]*?MonosChinos2\s*/i, "")
+      .replace(/ver online[^,]*,?/gi, "")
+      .replace(/Mira[^,]*(?:Sub Español)?[^,]*,?/gi, "")
+      .replace(/online gratis,?/gi, "")
+      .replace(/en Sub Español[^,]*,?/gi, "")
+      .replace(/y descarga en[^,]*,?/gi, "")
+      .replace(/Monos\s*Chinos2?,?/gi, "")
+      .replace(/\s+/g, " ")
+      .trim();
+    const seo = /online gratis|ver online|monoschinos|sub español|descarga en/i.test(text);
+    if (text.length >= 20 && !seo) info.overview = text.slice(0, 2000);
+  }
+
+  // Géneros
+  const genres = [];
+  const reG = /href=["'][^"']*genero[^"']*["'][^>]*>([^<]+)/gi;
+  let g;
+  while ((g = reG.exec(html))) {
+    const name = g[1].replace(/\s+/g, " ").trim();
+    if (name && name.length < 40 && genres.indexOf(name) < 0) genres.push(name);
+  }
+  if (genres.length) info.genres = genres.slice(0, 5);
+
+  // Año
+  const y = /\b(20[0-2]\d)\b/.exec(html);
+  // No confiar en años del footer (2000); buscar cerca de "Año" o en aired
+  const y2 = /Año[^0-9]{0,20}(20\d{2})/i.exec(html) || /year[^0-9]{0,10}(20\d{2})/i.exec(html);
+  if (y2) info.year = y2[1];
+
+  // Capítulos visibles en la ficha
+  const nums = {};
+  const re = new RegExp("/ver/(?:[^\"']*?/)?" + slug.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + "-episodio-(\\d+)", "gi");
+  let x;
+  while ((x = re.exec(html))) {
+    const n = parseInt(x[1], 10);
+    if (n >= 0 && n < 99999) nums[n] = true;
+  }
+  // data-i / data-e para AJAX
+  const di = /data-i=["'](\d+)["']/.exec(html);
+  const de = /data-e=["'](\d+)["']/.exec(html);
+  const epId = di ? di[1] : "";
+  const epTotal = de ? parseInt(de[1], 10) : 0;
+  if (epTotal > 0 && Object.keys(nums).length < epTotal) {
+    // rellenar 1..epTotal si aún no hay lista
+  }
+  const numbers = Object.keys(nums)
+    .map(Number)
+    .sort((a, b) => a - b)
+    .slice(0, 2000);
+  return { numbers, info, epId, epTotal };
+}
+
+async function fetchEpisodeNumbers(slug, epId, epTotal) {
+  if (!epId) return [];
+  try {
+    const body = "acc=episodes&i=" + encodeURIComponent(epId) + "&e=" + encodeURIComponent(String(epTotal || 1));
+    const r = await kino.fetch(BASE + "/ajax_pagination", {
+      method: "POST",
+      headers: {
+        "User-Agent": UA,
+        "Content-Type": "application/x-www-form-urlencoded",
+        "X-Requested-With": "XMLHttpRequest",
+        Referer: BASE + "/anime/" + slug,
+        Origin: BASE,
+      },
+      body: body,
+      timeoutMs: 12000,
+    });
+    if (!r.ok) return [];
+    const html = r.text || "";
+    const nums = {};
+    const re = /episodio-(\d+)/gi;
+    let x;
+    while ((x = re.exec(html))) {
+      const n = parseInt(x[1], 10);
+      if (n >= 0 && n < 99999) nums[n] = true;
+    }
+    // Si el AJAX no trae números pero conocemos el total, generar 1..N
+    if (!Object.keys(nums).length && epTotal > 0) {
+      for (let i = 1; i <= Math.min(epTotal, 2000); i++) nums[i] = true;
+    }
+    return Object.keys(nums)
+      .map(Number)
+      .sort((a, b) => a - b)
+      .slice(0, 2000);
+  } catch (e) {
+    kino.log("fetchEpisodeNumbers: " + (e && e.message));
+    return [];
+  }
+}
+
 function savedGet(key) {
   const raw = cacheGet(key);
   if (!raw) return null;
