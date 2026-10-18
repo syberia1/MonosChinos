@@ -109,21 +109,22 @@ function cleanImg(u) {
   u = abs(u);
   if (!u || /anime\.png|capblank|placeholder/i.test(u)) return "";
   u = u.replace(/[?#].*$/, "");
-
-  // /assets/thumbs/imagen/NAME.jpg.webp  OR  NAME.webp  OR  NAME.jpg  ->  /assets/img/serie/imagen/NAME.jpg
+  // /assets/thumbs/imagen/NAME.jpg.webp  OR  NAME.webp  OR  NAME.jpg
   let m = /\/assets\/thumbs\/imagen\/([^/]+)$/i.exec(u);
   if (m) {
-    let name = m[1].replace(/\.(webp|jpg|jpeg|png)$/i, "").replace(/\.(webp|jpg|jpeg|png)$/i, "");
+    let name = m[1].replace(/\.(webp|jpg|jpeg|png)$/i, "");
+    name = name.replace(/\.(webp|jpg|jpeg|png)$/i, "");
     return BASE + "/assets/img/serie/imagen/" + name + ".jpg";
   }
   m = /\/assets\/thumbs\/portada\/([^/]+)$/i.exec(u);
   if (m) {
-    let name = m[1].replace(/\.(webp|jpg|jpeg|png)$/i, "").replace(/\.(webp|jpg|jpeg|png)$/i, "");
+    let name = m[1].replace(/\.(webp|jpg|jpeg|png)$/i, "");
+    name = name.replace(/\.(webp|jpg|jpeg|png)$/i, "");
     return BASE + "/assets/img/serie/portada/" + name + ".jpg";
   }
-
-  // Cualquier otra ruta: solo se quita el doble sufijo ".jpg.webp"; un ".webp" suelto se respeta tal cual.
-  return u.replace(/\.jpg\.webp$/i, ".jpg");
+  // Ya es /assets/img/serie/... : quitar .webp si viniera
+  u = u.replace(/\.jpg\.webp$/i, ".jpg").replace(/\.webp$/i, ".jpg");
+  return u;
 }
 
 async function getPage(url, headers, timeoutMs) {
@@ -224,11 +225,14 @@ function norm(s) {
 function wordsOf(s) {
   return norm(s).split(" ").filter(function (w) { return w.length >= 3; });
 }
-function looseMatch(r, base) {
+function looseScore(r, base) {
   const q = wordsOf(base);
-  if (!q.length) return false;
+  if (!q.length) return 0;
   const names = wordsOf((r.name || r.title || "") + " " + (r.original_name || r.original_title || ""));
-  return q.filter(function (w) { return names.indexOf(w) >= 0; }).length / q.length >= 0.6;
+  return q.filter(function (w) { return names.indexOf(w) >= 0; }).length / q.length;
+}
+function looseMatch(r, base) {
+  return looseScore(r, base) >= 0.6;
 }
 
 // "... Temporada 2", "... S3", "... 2nd Season", "... II" o un numero final = temporada del sitio.
@@ -357,31 +361,38 @@ function stripHtml(s) {
   return decodeHtml(String(s || "").replace(/<br\s*\/?>/gi, " ").replace(/<[^>]+>/g, " ")).replace(/\s+/g, " ").trim();
 }
 
+function anilistInfo(m, y) {
+  return {
+    p: (m.coverImage && (m.coverImage.extraLarge || m.coverImage.large)) || "",
+    b: m.bannerImage || "",
+    o: stripHtml(m.description).slice(0, 700),
+    y: y ? String(y) : "",
+  };
+}
+
 function anilistPick(list, title, year) {
   const sp = splitTitle(title);
   const q = sp.base.length >= 2 ? sp.base : title;
+  const cands = [];
   for (let i = 0; i < (list || []).length; i++) {
     const m = list[i];
-    if (!m) continue;
-    const poster = m.coverImage && (m.coverImage.extraLarge || m.coverImage.large);
-    if (!poster) continue;
+    if (!m || !m.coverImage || !(m.coverImage.extraLarge || m.coverImage.large)) continue;
     const t = m.title || {};
-    const names = [t.romaji, t.english, t.native].filter(Boolean).join(" ");
-    const loose = looseMatch({ name: names }, q);
+    const score = looseScore({ name: [t.romaji, t.english, t.native].filter(Boolean).join(" ") }, q);
     const y = m.seasonYear || (m.startDate && m.startDate.year) || 0;
-    let ok;
-    if (sp.marked && sp.season > 1) ok = loose;
-    else if (year && y) ok = Math.abs(year - y) <= 1;
-    else ok = loose;
-    if (ok) {
-      return {
-        p: poster,
-        b: m.bannerImage || "",
-        o: stripHtml(m.description).slice(0, 700),
-        y: y ? String(y) : "",
-      };
-    }
+    cands.push({ m: m, y: y, score: score });
   }
+  // 1) Coincidencia segura: temporada marcada -> parecido del nombre; con año -> año (±1); sin año -> parecido.
+  for (let i = 0; i < cands.length; i++) {
+    const c = cands[i];
+    let ok;
+    if (sp.marked && sp.season > 1) ok = c.score >= 0.6;
+    else if (year && c.y) ok = Math.abs(year - c.y) <= 1;
+    else ok = c.score >= 0.6;
+    if (ok) return anilistInfo(c.m, c.y);
+  }
+  // 2) Sin año del sitio, AniList ya ordena por relevancia: se acepta el primero si el nombre se parece algo.
+  if (!year && cands.length && cands[0].score >= 0.34) return anilistInfo(cands[0].m, cands[0].y);
   return null;
 }
 
@@ -423,14 +434,17 @@ async function anilistBatch(items) {
 }
 
 // Pone caratula, fondo y resumen a los titulos de la lista. Lo guardado se aplica siempre (instantaneo): primero
-// AniList y encima TMDB. Lo que falte se busca en AniList (hasta 24 titulos, en bloques de 8) y en TMDB (hasta
-// `cap` por llamada: TMDB limita a unas 20 cada 10 s por plugin), en paralelo y con tiempo maximo.
+// AniList y encima TMDB. Lo que falte se busca en AniList (todos los que falten, hasta 96, en bloques de 8 y 4
+// peticiones a la vez: una peticion trae 8 titulos) y en TMDB (hasta `cap` por llamada: TMDB limita a unas 20 cada
+// 10 s por plugin), en paralelo y con tiempo maximo. Los titulos van en el orden recibido: quien llama los
+// intercala por fila para que lo primero que se ve (el principio de cada fila) sea lo primero que se busca.
 // Devuelve true si cambio algo.
 async function enrichItems(items, cap, budgetMs) {
   let touched = false;
   let fresh = 0;
   const tmTodo = [];
   const alTodo = [];
+  const queued = {};
   for (let i = 0; i < items.length; i++) {
     const it = items[i];
     const tm = cacheGet("tm2:" + it.id);
@@ -438,17 +452,21 @@ async function enrichItems(items, cap, budgetMs) {
     if (al && al !== "0" && applyAl(it, JSON.parse(al))) touched = true;
     if (tm) {
       if (tm !== "0" && applyInfo(it, JSON.parse(tm))) touched = true;
-    } else if (fresh < cap) {
+    } else if (fresh < cap && !queued["t" + it.id]) {
+      queued["t" + it.id] = true;
       fresh++;
       tmTodo.push(it);
     }
-    if (!al && !(tm && tm !== "0") && alTodo.length < 24) alTodo.push(it);
+    if (!al && !(tm && tm !== "0") && alTodo.length < 96 && !queued["a" + it.id]) {
+      queued["a" + it.id] = true;
+      alTodo.push(it);
+    }
   }
   if ((tmTodo.length || alTodo.length) && budgetMs > 600) {
     const chunks = [];
     for (let i = 0; i < alTodo.length; i += 8) chunks.push(alTodo.slice(i, i + 8));
     const jobs = [
-      mapLimit(chunks, 2, async function (chunk) {
+      mapLimit(chunks, 4, async function (chunk) {
         try {
           if (await anilistBatch(chunk)) touched = true;
         } catch (e) {
@@ -614,12 +632,10 @@ function cardsFrom(html, opts) {
     title = title.replace(/\s*\.\.\.\s*$/, "").trim();
 
     let src = "";
-
-    const ds = /(?:data-src|data-lazy|data-bg)=["']([^"']+)["']/i.exec(box);
+    const ds = /data-src=["']([^"']+)["']/i.exec(box);
     if (ds) src = ds[1];
-
-    if (!src || /anime\.png|blank|placeholder/i.test(src)) {
-      const ss = /<img[^>]+src=["']([^"']+)["']/i.exec(box);
+    if (!src || /anime\.png/i.test(src)) {
+      const ss = /src=["']([^"']*assets[^"']+)["']/i.exec(box);
       if (ss) src = ss[1];
     }
     let poster = cleanImg(src);
@@ -942,12 +958,21 @@ export async function home() {
   const shown = rows.filter(Boolean);
 
   // TMDB (caratulas, fondos): lo guardado se aplica siempre; consultas nuevas, unas pocas por apertura.
+  // Se intercalan las filas (1.º de cada fila, 2.º de cada fila...) para que lo que se ve primero se busque primero.
   const all = [];
-  shown.forEach(function (row) { row.items.forEach(function (it) { all.push(it); }); });
+  const longest = shown.reduce(function (n, row) { return Math.max(n, row.items.length); }, 0);
+  for (let i = 0; i < longest; i++) {
+    shown.forEach(function (row) {
+      if (row.items[i]) all.push(row.items[i]);
+    });
+  }
   let changed = false;
   if (all.length) {
     try {
-      changed = await enrichItems(all, 16, Math.max(0, Math.min(4000, timeLeft() - 2500)));
+      // Kino conserva la primera respuesta del inicio: si hubo carga nueva se espera mas para entregarla con imagenes.
+      const anyLoaded = Object.keys(loaded).length > 0;
+      const budget = Math.max(0, Math.min(anyLoaded ? 8000 : 1500, timeLeft() - 2500));
+      changed = await enrichItems(all, 18, budget);
     } catch (e) {
       kino.log("tmdb inicio: " + ((e && e.message) || e));
     }
@@ -965,14 +990,14 @@ export async function browse(ref, cursor) {
   const pageNum = Math.max(1, parseInt(cursor || "1", 10) || 1);
   if (ref === "peliculas") {
     const r = await loadMovies(pageNum);
-    await enrichItems(r.items, 14, 4000);
+    await enrichItems(r.items, 16, 6000);
     return { items: publicItems(r.items), next: r.next };
   }
   let url = ref === "emision" ? BASE + "/emision" : BASE + "/animes";
   if (pageNum > 1) url += "?p=" + pageNum;
   const page = await getPage(url);
   const items = cardsFrom(page.html);
-  await enrichItems(items, 14, 4000);
+  await enrichItems(items, 16, 6000);
   const next = items.length && (hasNextPage(page.html, pageNum) || items.length >= 24) ? String(pageNum + 1) : null;
   return { items: publicItems(items), next: next };
 }

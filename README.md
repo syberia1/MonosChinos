@@ -13,11 +13,21 @@ Plugin de Kino (apiVersion 6) para [MonosChinos](https://monoschinos.st): busca 
 | **Película** | Un solo botón de reproducir (capítulo 1 del sitio). |
 | **Reproducir / Descargar** | Voe, MixDrop, Mp4Upload, LuluStream, SaveFiles, Doodstream, Filemoon y otros; el que no elijas queda en el menú Servidor. |
 
-## Qué cambió en la 3.6.2
+## Qué cambió en la 3.7.0
+
+- **Se revirtieron los dos cambios de código de las versiones 3.6.1 y 3.6.2:** `cleanImg()` y la lectura de la imagen en `cardsFrom()` vuelven a como estaban en la 3.6.0.
+- **Carátulas de TMDB y AniList mucho más rápidas.** Había un error de reparto: el tope de AniList (24 títulos) se gastaba entero en la primera fila, así que Animes y Películas no recibían imágenes en el inicio, y solo "Ver más" (una sola fila) las completaba. Ahora:
+  - AniList busca **todos** los títulos que falten (hasta 96 por apertura, 8 por petición y 4 peticiones a la vez);
+  - los títulos se **intercalan entre filas** (1.º de cada fila, 2.º de cada fila…), de modo que lo primero que se ve es lo primero que se busca;
+  - TMDB hace hasta 18 búsquedas por apertura en paralelo y sus datos reemplazan a los de AniList cuando llegan.
+- **Primera respuesta completa.** Kino conserva la primera respuesta del inicio, así que cuando hay carga nueva el plugin espera hasta 8 segundos a las imágenes antes de entregarla. Con la copia guardada reciente no espera (solo hasta 1,5 s por si falta alguna).
+- **AniList más tolerante:** si el sitio no trae año, se acepta el primer resultado cuando el nombre se parece al menos en un tercio; antes se descartaba y la carátula quedaba vacía (y se recordaba un día).
+
+## Qué cambió en la 3.6.2 (revertida en la 3.7.0)
 
 - **Imagen de las tarjetas (`cardsFrom()`).** Se lee `data-src`, `data-lazy` o `data-bg`; si no hay ninguno, o es un marcador (`anime.png`, `blank`, `placeholder`), se toma el `src` de la primera `<img>` de la tarjeta. Antes solo se aceptaban `src` que contuvieran `assets`.
 
-## Qué cambió en la 3.6.1
+## Qué cambió en la 3.6.1 (revertida en la 3.7.0)
 
 - **`cleanImg()` con tu versión.** Las rutas `/assets/thumbs/imagen/…` y `/assets/thumbs/portada/…` se convierten a `/assets/img/serie/imagen/…jpg` y `/assets/img/serie/portada/…jpg`. Para cualquier otra ruta solo se quita el doble sufijo `.jpg.webp`; un `.webp` suelto ya no se cambia a `.jpg` (esa conversión podía apuntar a un archivo que no existe).
 
