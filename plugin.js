@@ -1,4 +1,4 @@
-// MonosChinos Kino plugin 3.5.0 - https://monoschinos.st
+// MonosChinos Kino plugin 3.10.4 - https://monoschinos.st
 // Modelo TioAnime: filas con copia guardada, TMDB (caratulas, fondos, capitulos), servidores multiples.
 
 const BASE = "https://monoschinos.st";
@@ -1392,6 +1392,17 @@ function unpackAll(html) {
   return first + (second ? "\n" + second : "");
 }
 
+// URL de video real (no .js/.css del reproductor ni dominios que contengan "mp4" en el nombre).
+function isVideoUrl(u) {
+  u = String(u || "");
+  if (!/^https?:\/\//i.test(u)) return false;
+  if (/doubleclick|googlesyndication|adserver|\/ads?\/|\.js(?:\?|$)|\.css(?:\?|$)|\.json(?:\?|$)|\/player\/videojs\//i.test(u)) return false;
+  // Extensión de ruta .m3u8 / .mp4 (antes de ? o #), o rutas típicas de CDN de video.
+  if (/\.(?:m3u8|mp4)(?:$|[?#])/i.test(u)) return true;
+  if (/\/(?:hls|hls2|dash)\/|\/d\/[^/]+\/video\.mp4/i.test(u)) return true;
+  return false;
+}
+
 function findStreamUrl(html, base) {
   const src = String(html || "")
     .replace(/\\\//g, "/")
@@ -1404,37 +1415,42 @@ function findStreamUrl(html, base) {
     if (u.charAt(0) === "/") return originOf(root) + u;
     return u;
   }
-  let m = /MDCore\.wurl\s*=\s*["']([^"']+)["']/i.exec(src);
-  if (m && /\.(mp4|m3u8)/i.test(m[1])) return fix(m[1]);
+  // mp4upload: https://a4.mp4upload.com:183/d/<token>/video.mp4 (antes de patrones genéricos:
+  // el dominio "mp4upload" hacía coincidir ".mp4" dentro del nombre del host).
+  let m = /https?:\/\/[a-z0-9.-]+(?::\d+)?\/d\/[A-Za-z0-9]+\/video\.mp4/i.exec(src);
+  if (m) return m[0];
+  m = /MDCore\.wurl\s*=\s*["']([^"']+)["']/i.exec(src);
+  if (m && isVideoUrl(fix(m[1]))) return fix(m[1]);
   m = /\bwurl\s*=\s*["']([^"']+)["']/i.exec(src);
-  if (m && /\.(mp4|m3u8)/i.test(m[1])) return fix(m[1]);
+  if (m && isVideoUrl(fix(m[1]))) return fix(m[1]);
   // StreamWish / ObeyWish / Lulu: var links={"hls4":"...","hls3":"...","hls2":"..."}
   const hre = /["']hls[234]["']\s*:\s*["']([^"']+)["']/gi;
   let h;
   const hls = [];
   while ((h = hre.exec(src))) hls.push(fix(h[1]));
-  for (let i = 0; i < hls.length; i++) if (/^https?:\/\//i.test(hls[i]) && /\.m3u8|\/hls\//i.test(hls[i])) return hls[i];
-  if (hls.length && /^https?:\/\//i.test(hls[0])) return hls[0];
+  for (let i = 0; i < hls.length; i++) if (isVideoUrl(hls[i])) return hls[i];
+  if (hls.length && isVideoUrl(hls[0])) return hls[0];
+  // src: "https://…/video.mp4"  (Video.js / nuevo player de Mp4Upload)
+  m = /(?:src|file|source|video_url)\s*[:=]\s*["']((?:https?:)?\/\/[^"']+)["']/i.exec(src);
+  if (m && isVideoUrl(fix(m[1]))) return fix(m[1]);
   const patterns = [
-    /(?:file|src|source|video_url)["']?\s*[:=]\s*["']((?:https?:)?\/\/[^"'\s<>]+\.(?:m3u8|mp4)[^"'\s<>]*)["']/i,
+    // Extensión obligatoria al final del path (no "mp4" dentro del host).
+    /(?:file|src|source|video_url)["']?\s*[:=]\s*["']((?:https?:)?\/\/[^"'\s<>]+\/[^"'\s<>]*\.(?:m3u8|mp4)(?:\?[^"'\s<>]*)?)["']/i,
     /(?:file|src|source)["']?\s*[:=]\s*["'](\/[^"'\s<>]+\.m3u8[^"'\s<>]*)["']/i,
-    /https?:\/\/[^"'\s<>]+\.m3u8[^"'\s<>]*/i,
-    /https?:\/\/[^"'\s<>]+\.mp4[^"'\s<>]*/i,
-    /["']((?:https?:)?\/\/[^"']+\.m3u8[^"']*)["']/i,
-    /["']((?:https?:)?\/\/[^"']+\.mp4[^"']*)["']/i,
+    /https?:\/\/[^"'\s<>]+\/[^"'\s<>]*\.m3u8(?:\?[^"'\s<>]*)?/i,
+    /https?:\/\/[^"'\s<>]+\/[^"'\s<>]*\.mp4(?:\?[^"'\s<>]*)?/i,
+    /["']((?:https?:)?\/\/[^"']+\/[^"']*\.m3u8(?:\?[^"']*)?)["']/i,
+    /["']((?:https?:)?\/\/[^"']+\/[^"']*\.mp4(?:\?[^"']*)?)["']/i,
   ];
   for (let i = 0; i < patterns.length; i++) {
     const re = new RegExp(patterns[i].source, "gi");
     let mm;
     while ((mm = re.exec(src))) {
       const cand = fix(mm[1] || mm[0]);
-      if (/doubleclick|googlesyndication|adserver|\/ads?\//i.test(cand)) continue;
+      if (!isVideoUrl(cand)) continue;
       return cand;
     }
   }
-  // mp4upload: https://a4.mp4upload.com:183/d/<token>/video.mp4
-  m = /https?:\/\/[a-z0-9.-]+(?::\d+)?\/d\/[^"'\s<>]+\/video\.mp4/i.exec(src);
-  if (m) return m[0];
   return "";
 }
 
@@ -1533,8 +1549,10 @@ async function packerStream(embed, label) {
   let file = findStreamUrl(unpacked, page.url) || findStreamUrl(html, page.url);
   if (!file) throw fail("unavailable", goneIn(html) ? label + " borrado" : label + " sin video", "serverFailed");
   if (file.indexOf("//") === 0) file = "https:" + file;
-  if (!/^https?:\/\//i.test(file)) throw fail("unavailable", label + " URL invalida", "serverFailed");
-  kino.log(label + " OK " + file.slice(0, 60));
+  if (!/^https?:\/\//i.test(file) || !isVideoUrl(file)) {
+    throw fail("unavailable", goneIn(html) ? label + " borrado" : label + " sin video", "serverFailed");
+  }
+  kino.log(label + " OK " + file.slice(0, 70));
   return streamResult(file, origin + "/", label, null, heightFromUrl(file) || playerHint(unpacked) || playerHint(html));
 }
 
@@ -1561,30 +1579,222 @@ async function doodStream(embed) {
   return streamResult(full, origin + "/", "Doodstream");
 }
 
-// Ok.ru: la pagina /videoembed/<id> trae un data-options (JSON escapado) con el manifiesto HLS o la lista de calidades.
+// SaveFiles / streamhls.to: la página /e/<id> es un shell; el manifiesto sale de POST /dl.
+async function savefilesStream(embed) {
+  const u = String(embed || "");
+  const idm = /\/(?:e|v|f|d|embed)\/([A-Za-z0-9]+)/i.exec(u) || /\/([A-Za-z0-9]{8,20})(?:\/|$|\?)/.exec(u);
+  const id = idm ? idm[1] : "";
+  if (!id) throw fail("unavailable", "SaveFiles sin id", "serverFailed");
+  const origin = originOf(u) || "https://streamhls.to";
+  const ref = origin + "/";
+  const page = await getPage(origin + "/e/" + id, { Referer: BASE + "/" }, 10000);
+  if (goneIn(page.html)) throw fail("unavailable", "SaveFiles borrado", "serverFailed");
+  // Prefer POST /dl (ResolveURL / Kodi style)
+  let html = "";
+  try {
+    const r = await kino.fetch(origin + "/dl", {
+      method: "POST",
+      headers: {
+        "User-Agent": UA,
+        Referer: ref,
+        Origin: origin,
+        Accept: "text/html,application/xhtml+xml,*/*",
+        "Content-Type": "application/x-www-form-urlencoded",
+      },
+      body: { form: { op: "embed", file_code: id, auto: "0", referer: "" } },
+      timeoutMs: 10000,
+    });
+    html = bodyText(r);
+  } catch (e) {
+    html = "";
+  }
+  let file = findStreamUrl(html, origin) || findStreamUrl(page.html, origin);
+  if (!file) {
+    // Algunos mirrors ponen el source en un script tras el POST fallido: reintentar lectura del embed.
+    const unpacked = unpackAll(page.html + "\n" + html);
+    file = findStreamUrl(unpacked, origin);
+  }
+  if (!file) throw fail("unavailable", goneIn(page.html) || goneIn(html) ? "SaveFiles borrado" : "SaveFiles sin video", "serverFailed");
+  if (file.indexOf("//") === 0) file = "https:" + file;
+  if (!/^https?:\/\//i.test(file)) throw fail("unavailable", "SaveFiles URL invalida", "serverFailed");
+  kino.log("SaveFiles OK " + file.slice(0, 70));
+  return streamResult(file, ref, "SaveFiles", null, heightFromUrl(file));
+}
+
+
+// Voe: voe.sx redirige a un dominio espejo; el stream va en <script type="application/json"> cifrado (F7).
+function voeRot13(s) {
+  return String(s || "").replace(/[A-Za-z]/g, function (c) {
+    const base = c <= "Z" ? 65 : 97;
+    return String.fromCharCode(((c.charCodeAt(0) - base + 13) % 26) + base);
+  });
+}
+function voeReplacePatterns(s) {
+  return String(s || "")
+    .replace(/@\$/g, "_").replace(/\^\^/g, "_").replace(/~@/g, "_")
+    .replace(/%\?/g, "_").replace(/\*~/g, "_").replace(/!!/g, "_").replace(/#&/g, "_");
+}
+function voeCharShift(s, n) {
+  let out = "";
+  for (let i = 0; i < s.length; i++) out += String.fromCharCode(s.charCodeAt(i) - n);
+  return out;
+}
+function voeB64(s) {
+  try {
+    return utf8(b64bytes(s));
+  } catch (e) {
+    return "";
+  }
+}
+function voeDecryptF7(encoded) {
+  try {
+    let p = voeRot13(encoded);
+    p = voeReplacePatterns(p).replace(/_/g, "");
+    p = voeB64(p);
+    if (!p) return null;
+    p = voeCharShift(p, 3);
+    p = p.split("").reverse().join("");
+    p = voeB64(p);
+    if (!p || p.charAt(0) !== "{") return null;
+    return JSON.parse(p);
+  } catch (e) {
+    return null;
+  }
+}
+function voePickEncoded(html) {
+  const m = /<script[^>]*type\s*=\s*["']application\/json["'][^>]*>([\s\S]*?)<\/script>/i.exec(String(html || ""));
+  if (!m) return "";
+  let raw = String(m[1] || "").trim();
+  // ["ENCODED"] o ENCODED suelto
+  const arr = /^\s*\[\s*"([\s\S]*?)"\s*\]\s*$/.exec(raw);
+  if (arr) return arr[1];
+  if (raw.charAt(0) === '"' && raw.charAt(raw.length - 1) === '"') {
+    try { return JSON.parse(raw); } catch (e) {}
+  }
+  return raw.replace(/^\[\s*"/, "").replace(/"\s*\]$/, "");
+}
+async function voeStream(embed) {
+  let url = String(embed || "").trim();
+  if (!url) throw fail("unavailable", "Voe sin url", "serverFailed");
+  // 1) pagina inicial (a menudo solo un redirect JS a dominio espejo)
+  let page = await getPage(url, { Referer: BASE + "/", "User-Agent": DESKTOP_UA }, 12000);
+  let html = page.html;
+  let finalUrl = page.url || url;
+  const redir =
+    /window\.location\.href\s*=\s*['"]([^'"]+)['"]/i.exec(html) ||
+    /location\.replace\(\s*['"]([^'"]+)['"]/i.exec(html) ||
+    /href\s*=\s*['"](https?:\/\/[^'"]+\/e\/[^'"]+)['"]/i.exec(html);
+  if (redir && redir[1] && redir[1] !== finalUrl) {
+    const next = abs(redir[1]);
+    // dominio espejo no declarado: Kino preguntara en resolve (hasta 3 hosts)
+    page = await getPage(next, { Referer: finalUrl, "User-Agent": DESKTOP_UA }, 12000);
+    html = page.html;
+    finalUrl = page.url || next;
+  }
+  if (goneIn(html)) throw fail("unavailable", "Voe borrado", "serverFailed");
+  let encoded = voePickEncoded(html);
+  let data = encoded ? voeDecryptF7(encoded) : null;
+  // Si el JSON no vino o el decrypt fallo, buscar m3u8/mp4 en claro (versiones viejas)
+  let file = "";
+  if (data) {
+    file = String(data.source || data.direct_access_url || "").trim();
+  }
+  if (!file) {
+    file = findStreamUrl(html, finalUrl) || findStreamUrl(unpackAll(html), finalUrl);
+  }
+  if (!file || !/^https?:\/\//i.test(file)) {
+    throw fail("unavailable", goneIn(html) ? "Voe borrado" : "Voe sin video", "serverFailed");
+  }
+  kino.log("Voe OK " + file.slice(0, 70));
+  const origin = originOf(finalUrl);
+  return streamResult(file, origin + "/", "Voe", { Origin: origin + "/" }, heightFromUrl(file));
+}
+
+// Ok.ru: metadata en data-options (clásico) o embebida como "metadata":"{...}"; API POST a veces pide sesión.
+function okruParseMeta(html) {
+  const src = String(html || "");
+  // 1) data-options="...flashvars.metadata..."
+  const m = /data-options=(?:"([^"]+)"|'([^']+)')/.exec(src);
+  if (m) {
+    try {
+      const opts = JSON.parse(decodeHtml(m[1] || m[2]));
+      const raw = opts && opts.flashvars && opts.flashvars.metadata;
+      return typeof raw === "string" ? JSON.parse(raw) : raw;
+    } catch (e) {}
+  }
+  // 2) "metadata":"{...}" o &quot;metadata&quot;:&quot;{...}
+  const markers = ['"metadata":"', "&quot;metadata&quot;:&quot;", "metadata&quot;:&quot;"];
+  for (let i = 0; i < markers.length; i++) {
+    const idx = src.indexOf(markers[i]);
+    if (idx < 0) continue;
+    const start = src.indexOf("{", idx);
+    if (start < 0) continue;
+    let depth = 0;
+    for (let j = start; j < src.length && j < start + 60000; j++) {
+      const ch = src.charAt(j);
+      if (ch === "{") depth++;
+      else if (ch === "}") {
+        depth--;
+        if (depth === 0) {
+          try {
+            const blob = decodeHtml(src.slice(start, j + 1).replace(/\\"/g, '"').replace(/\\\//g, "/"));
+            return JSON.parse(blob);
+          } catch (e) { break; }
+        }
+      }
+    }
+  }
+  return null;
+}
 async function okruStream(embed) {
   const id = (/ok\.ru\/(?:videoembed|video)\/(\d+)/i.exec(embed) || /odnoklassniki\.ru\/(?:videoembed|video)\/(\d+)/i.exec(embed) || [])[1];
   if (!id) throw fail("unavailable", "Ok.ru sin id", "serverFailed");
-  const page = await getPage("https://ok.ru/videoembed/" + id, { Referer: BASE + "/", "User-Agent": DESKTOP_UA }, 10000);
-  const m = /data-options=(?:"([^"]+)"|'([^']+)')/.exec(page.html);
-  if (!m) throw fail("unavailable", goneIn(page.html) ? "Ok.ru borrado" : "Ok.ru sin video", "serverFailed");
-  let meta = null;
-  try {
-    const opts = JSON.parse(decodeHtml(m[1] || m[2]));
-    const raw = opts && opts.flashvars && opts.flashvars.metadata;
-    meta = typeof raw === "string" ? JSON.parse(raw) : raw;
-  } catch (e) {
-    meta = null;
+  // Preferir HTTPS aunque el data-player traiga http://
+  const embedUrl = "https://ok.ru/videoembed/" + id;
+  const page = await getPage(embedUrl, { Referer: BASE + "/", "User-Agent": DESKTOP_UA }, 12000);
+  let meta = okruParseMeta(page.html);
+  // API POST (algunos embeds ya no meten data-options; a veces exige sesión → userNotFound)
+  if (!meta) {
+    try {
+      const r = await kino.fetch("https://ok.ru/dk?cmd=videoPlayerMetadata", {
+        method: "POST",
+        headers: {
+          "User-Agent": DESKTOP_UA,
+          Referer: embedUrl,
+          Origin: "https://ok.ru",
+          Accept: "application/json, text/javascript, */*; q=0.01",
+          "Content-Type": "application/x-www-form-urlencoded",
+        },
+        body: { form: { mid: id } },
+        timeoutMs: 10000,
+      });
+      const body = bodyText(r);
+      if (r.ok && body && body.charAt(0) === "{") {
+        const j = JSON.parse(body);
+        if (!j.error) meta = j;
+        else kino.log("Ok.ru API " + String(j.error));
+      }
+    } catch (e) {
+      kino.log("Ok.ru API fail " + ((e && e.message) || e));
+    }
   }
-  if (!meta) throw fail("unavailable", "Ok.ru sin metadata", "serverFailed");
+  if (!meta) {
+    // Página genérica sin título de video = borrado, restringido o sesión requerida
+    throw fail("unavailable", goneIn(page.html) ? "Ok.ru borrado" : "Ok.ru sin video", "serverFailed");
+  }
+  if (meta.error || meta.status === "error") {
+    throw fail("unavailable", "Ok.ru " + String(meta.error || "error"), "serverFailed");
+  }
   const hls = meta.hlsManifestUrl || meta.ondemandHls || meta.hlsMasterPlaylistUrl;
-  if (hls && /^https?:\/\//i.test(hls)) return streamResult(hls, "https://ok.ru/", "Ok.ru");
+  if (hls && /^https?:\/\//i.test(hls)) {
+    return streamResult(hls, "https://ok.ru/", "Ok.ru", { Origin: "https://ok.ru/" }, heightFromUrl(hls));
+  }
   const rank = { mobile: 1, lowest: 2, low: 3, sd: 4, hd: 5, full: 6, quad: 7, ultra: 8 };
   const height = { mobile: 144, lowest: 240, low: 360, sd: 480, hd: 720, full: 1080, quad: 1440, ultra: 2160 };
   const vids = (meta.videos || []).filter(function (v) { return v && /^https?:\/\//i.test(v.url || ""); });
   vids.sort(function (a, b) { return (rank[b.name] || 0) - (rank[a.name] || 0); });
-  if (!vids.length) throw fail("unavailable", goneIn(page.html) || meta.error ? "Ok.ru borrado" : "Ok.ru sin video", "serverFailed");
-  return streamResult(vids[0].url, "https://ok.ru/", "Ok.ru", null, height[vids[0].name] || 0);
+  if (!vids.length) throw fail("unavailable", "Ok.ru sin video", "serverFailed");
+  return streamResult(vids[0].url, "https://ok.ru/", "Ok.ru", { Origin: "https://ok.ru/" }, height[vids[0].name] || 0);
 }
 
 // Convierte enlaces de "pagina de descarga" o de ficha en el enlace de reproductor incrustado.
@@ -1601,21 +1811,89 @@ function embedUrl(s) {
       const m = /^(https?:\/\/[^/]+)\/(?!embed-)([a-z0-9]{8,16})(?:\.html)?$/i.exec(u);
       return m ? m[1] + "/embed-" + m[2] + ".html" : u;
     }
+    case "hexload": {
+      const m = /^(https?:\/\/[^/]+)\/(?!embed-)([a-z0-9]{8,20})(?:\.html)?$/i.exec(u);
+      return m ? m[1] + "/embed-" + m[2] : u.replace(/\/(?:f|d|download)\//, "/embed-");
+    }
+    case "savefiles":
+      return u.replace(/\/(?:f|d|v|download)\//, "/e/");
     case "lulu":
     case "obeywish":
     case "streamwish":
     case "vidhide":
     case "filemoon":
+    case "dood":
       return u.replace(/^(https?:\/\/[^/]+)\/(?:f|d|v|download)\//, "$1/e/");
     default:
       return u;
   }
 }
 
+
+// Filemoon/Byse: SPA + captcha/PoW en API. Resolvemos embed_frame_url y capturamos ahí (mejor que el shell /e/).
+async function filemoonStream(embed, noCap) {
+  const u = String(embed || "").trim();
+  const idm = /\/(?:e|eyi|d|download|v)\/([A-Za-z0-9]+)/i.exec(u);
+  const id = idm ? idm[1] : "";
+  const origin = originOf(u);
+  let captureTargets = [];
+  if (id && origin) {
+    try {
+      const detailsUrl = origin + "/api/videos/" + id + "/embed/details";
+      const r = await kino.fetch(detailsUrl, {
+        headers: {
+          "User-Agent": DESKTOP_UA,
+          Referer: origin + "/e/" + id,
+          Accept: "application/json",
+        },
+        timeoutMs: 8000,
+      });
+      const body = bodyText(r);
+      if (r.ok && body && body.charAt(0) === "{") {
+        const j = JSON.parse(body);
+        if (j && j.embed_frame_url && /^https?:\/\//i.test(j.embed_frame_url)) {
+          captureTargets.push(j.embed_frame_url);
+          kino.log("Filemoon frame " + String(j.embed_frame_url).slice(0, 70));
+        }
+      }
+    } catch (e) {
+      kino.log("Filemoon details " + ((e && e.message) || e));
+    }
+  }
+  // También el embed original (byse/filemoon)
+  if (u) captureTargets.push(u.replace(/\/$/, ""));
+  // Dedup
+  const seen = {};
+  captureTargets = captureTargets.filter(function (t) {
+    if (seen[t]) return false;
+    seen[t] = true;
+    return true;
+  });
+
+  if (!noCap && canCapture()) {
+    let lastErr = null;
+    for (let i = 0; i < captureTargets.length; i++) {
+      if (left() < 5000) break;
+      try {
+        return await captureStream(captureTargets[i], "Filemoon");
+      } catch (e) {
+        lastErr = e;
+        kino.log("Filemoon capture " + originOf(captureTargets[i]) + ": " + ((e && e.message) || e));
+      }
+    }
+    if (lastErr && left() < 9000) throw lastErr;
+  }
+  // Último recurso: packer en el embed (casi nunca hay packer en Byse SPA)
+  return packerStream(u, "Filemoon");
+}
+
 async function fetchPath(s, url) {
   switch (s.kind) {
     case "dood": return doodStream(url);
     case "okru": return okruStream(url);
+    case "savefiles": return savefilesStream(url);
+    case "voe": return voeStream(url);
+    case "filemoon": return filemoonStream(url, true); // sin captura aquí; rawStream decide
     default: return packerStream(url, KIND_LABEL[s.kind] || s.name || "Servidor");
   }
 }
@@ -1623,14 +1901,18 @@ async function fetchPath(s, url) {
 async function rawStream(s, noCap) {
   const url = embedUrl(s);
   const label = KIND_LABEL[s.kind] || s.name || "Servidor";
-  // Voe y Filemoon/Byse arman el video con JavaScript (y Voe cambia de dominio): navegador oculto primero.
-  if (!noCap && (s.kind === "voe" || s.kind === "filemoon") && canCapture()) {
+  // Filemoon: API details → embed_frame_url → captura (el shell /e/ casi nunca emite video solo).
+  if (s.kind === "filemoon") {
+    return filemoonStream(url, noCap);
+  }
+  // Hexload: ofuscación pesada → captura primero.
+  if (!noCap && s.kind === "hexload" && canCapture()) {
     try {
       return await captureStream(url, label);
     } catch (e) {
       kino.log("capture " + s.kind + ": " + ((e && e.message) || e));
       if (left() < 9000) throw e;
-      return fetchPath(s, url); // ultimo intento por la via normal
+      return fetchPath(s, url);
     }
   }
   let first = null;
@@ -1639,7 +1921,7 @@ async function rawStream(s, noCap) {
   } catch (e) {
     first = e;
   }
-  // Respaldo: si la via normal fallo y queda tiempo, intentar con el navegador oculto (si no es un video borrado).
+  // Respaldo con navegador oculto si queda tiempo (Dood/CF, Voe decrypt fallido, etc.).
   if (!noCap && canCapture() && left() > 14000 && !/borrad/i.test(String((first && first.message) || ""))) {
     try {
       return await captureStream(url, label);
@@ -1707,7 +1989,7 @@ export async function resolve(ref) {
     pref = String((kino.config && (kino.config.server || (kino.config.get && kino.config.get("server")))) || "");
   } catch (e) {}
 
-  const viaCapture = function (s) { return (s.kind === "voe" || s.kind === "filemoon") && canCapture(); };
+  const viaCapture = function (s) { return (s.kind === "filemoon" || s.kind === "hexload") && canCapture(); };
   const idxs = servers.map(function (_s, i) { return i; });
   const results = []; // { i, st }
   const failed = {};

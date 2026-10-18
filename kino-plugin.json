@@ -1,10 +1,10 @@
 {
   "id": "monoschinos",
   "name": "MonosChinos",
-  "version": "3.10.0",
+  "version": "3.10.4",
   "apiVersion": 6,
   "entry": "plugin.js",
-  "description": "Anime subtitulado de monoschinos.st: En emisión, animes y películas, con carátulas de TMDB y AniList. Servidores: MixDrop, Mp4Upload, LuluStream, Uqload, Ok.ru, ObeyWish, Doodstream, Voe y Filemoon.",
+  "description": "Anime subtitulado de monoschinos.st: En emisión, animes y películas, con carátulas de TMDB y AniList. Servidores: MixDrop, Mp4Upload, LuluStream, Uqload, Ok.ru, ObeyWish, Doodstream, Voe, Filemoon, SaveFiles y Hexload.",
   "author": "tu-usuario-de-github",
   "hosts": [
     "graphql.anilist.co",
@@ -102,7 +102,33 @@
     "bysedikamoum.com",
     "bysejikuar.com",
     "bysevepoin.com",
-    "f16px.com"
+    "f16px.com",
+    "a4.mp4upload.com",
+    "a5.mp4upload.com",
+    "a6.mp4upload.com",
+    "s1.savefiles.com",
+    "s2.savefiles.com",
+    "s3.savefiles.com",
+    "s4.savefiles.com",
+    "s5.savefiles.com",
+    "uqload.vc",
+    "asnwish.com",
+    "hexload.net",
+    "derricknationtop.com",
+    "tubelessceliolymph.com",
+    "simpulumlamerop.com",
+    "urochsunloath.com",
+    "nathanfromsubject.com",
+    "yip.su",
+    "metagnathtuggers.com",
+    "donaldlineelse.com",
+    "charlestoughrace.com",
+    "cloudwindow-route.com",
+    "voe-network.net",
+    "n1mwq.org",
+    "byse.sx",
+    "streamlyplayer.online",
+    "streamlyplayero.online"
   ],
   "streamHosts": "any",
   "capabilities": [
@@ -140,16 +166,8 @@
           "label": "LuluStream"
         },
         {
-          "value": "uqload",
-          "label": "Uqload"
-        },
-        {
-          "value": "okru",
-          "label": "Ok.ru"
-        },
-        {
-          "value": "obeywish",
-          "label": "ObeyWish"
+          "value": "voe",
+          "label": "Voe"
         },
         {
           "value": "savefiles",
@@ -158,10 +176,6 @@
         {
           "value": "dood",
           "label": "Doodstream"
-        },
-        {
-          "value": "voe",
-          "label": "Voe"
         },
         {
           "value": "filemoon",

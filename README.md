@@ -13,6 +13,39 @@ Plugin de Kino (apiVersion 6) para [MonosChinos](https://monoschinos.st): busca 
 | **Película** | Un solo botón de reproducir (capítulo 1 del sitio). |
 | **Reproducir / Descargar** | MixDrop, Mp4Upload, LuluStream, Uqload, Ok.ru, ObeyWish, SaveFiles, Doodstream, Voe y Filemoon; el que no elijas queda en el menú Servidor. |
 
+## Qué cambió en la 3.10.4 (Filemoon y Ok.ru)
+
+**Filemoon/Byse.** El embed `/e/` es solo un shell SPA; el video real carga en `embed_frame_url` (p. ej. `n1mwq.org/...`) y la API exige captcha/PoW que Kino no puede resolver. Ahora:
+- Se llama a `/api/videos/<id>/embed/details` para obtener `embed_frame_url`.
+- El navegador oculto captura **ese** frame (no solo el shell), con más probabilidad de ver el HLS.
+- Sigue haciendo falta `"browser": true` aprobado; sin captura Filemoon no puede abrir.
+
+**Ok.ru (p. ej. Claymore).** En muchos embeds antiguos ya no viene `data-options` y la API `videoPlayerMetadata` responde `userNotFound` sin sesión. El extractor:
+- Parsea también metadata embebida en el HTML (no solo `data-options`).
+- Intenta el POST a la API como respaldo.
+- Si no hay streams, marca el video como no disponible (en Claymore el de Ok.ru está vacío/restringido; no es un fallo de parsing aislado).
+
+## Qué cambió en la 3.10.3 (Voe)
+
+**Qué pasaba.** Voe redirige de `voe.sx` a un dominio espejo aleatorio y el manifiesto va cifrado en un `<script type="application/json">`. El plugin solo usaba el navegador oculto; a veces capturaba, a veces hacía timeout o 404.
+
+**Qué cambió.**
+- **Decrypt F7 nativo** (mismo algoritmo que Cloudstream): ROT13 → sustituir patrones → quitar `_` → base64 → shift -3 → reverse → base64 → JSON con `source` (HLS) y `direct_access_url` (MP4).
+- Sigue el redirect JS al dominio espejo y luego descifra, **sin depender del navegador oculto**.
+- La captura queda solo como respaldo si el decrypt falla.
+- Hosts con varios espejos conocidos de Voe; si aparece uno nuevo, Kino preguntará al reproducir (hasta 3 por llamada).
+
+## Qué cambió en la 3.10.2 (reproducción de servidores)
+
+**Problemas de los logs.** Mp4Upload devolvía `video.min.js` (el reproductor) en lugar del `.mp4` real y Kino fallaba con `parsing_container_unsupported`. SaveFiles/streamhls.to nunca encontraba video. Hexload y Dood (playmogo/Cloudflare) fallaban en silencio. Filemoon/Byse sigue dependiendo del navegador oculto (SPA).
+
+**Qué se corrigió.**
+- **Mp4Upload:** el patrón `.mp4` coincidía dentro del *nombre de dominio* `mp4upload.com`. Ahora se exige la extensión al final del path y se prioriza `…/d/<token>/video.mp4`. Se rechazan `.js`/`.css` del player.
+- **SaveFiles:** handler propio con `POST /dl` (`op=embed&file_code=…`), que es como obtiene el `master.m3u8` el plugin de ResolveURL.
+- **Hexload:** se trata como Voe/Filemoon (navegador oculto primero); el HTML trae JS muy ofuscado sin URL en claro.
+- **Dood/playmogo:** si `kino.fetch` choca con Cloudflare, se intenta captura como respaldo.
+- **hosts** ampliado (CDN de SaveFiles, mirrors de Mp4Upload, dominios Byse/Dood actuales).
+
 ## Qué cambió en la 3.10.0 (servidores de reproducción)
 
 **Qué pasaba.** Solo MixDrop abría. Causas encontradas en el código:
