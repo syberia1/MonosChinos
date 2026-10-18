@@ -1,10 +1,10 @@
 {
   "id": "monoschinos",
   "name": "MonosChinos",
-  "version": "3.8.0",
+  "version": "3.9.0",
   "apiVersion": 6,
   "entry": "plugin.js",
-  "description": "Anime subtitulado de monoschinos.st. En emisión (últimos capítulos), animes y películas, con carátulas y fondos de AniList (principal) y TMDB (secundario) e imágenes de capítulos de TMDB.",
+  "description": "Anime subtitulado de monoschinos.st. En emisión (últimos capítulos), animes y películas, con carátulas y fondos de TMDB (principal) y AniList (respaldo inmediato) e imágenes de capítulos de TMDB.",
   "author": "tu-usuario-de-github",
   "hosts": [
     "graphql.anilist.co",

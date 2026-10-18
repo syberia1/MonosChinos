@@ -341,16 +341,16 @@ async function tmdbInfoFor(item) {
   return info;
 }
 
-// TMDB es la fuente secundaria: solo rellena la caratula o el fondo que AniList no entrego.
+// TMDB es la fuente principal: sus imagenes siempre mandan y reemplazan a las de AniList si llegan despues.
 function applyInfo(item, info) {
   if (!info) return false;
   let changed = false;
-  if (info.p && !item._alp) {
+  if (info.p) {
     item.poster = info.p;
     item._tmp = true;
     changed = true;
   }
-  if (info.b && !item._alb) {
+  if (info.b) {
     item.backdrop = info.b;
     item._tmb = true;
     changed = true;
@@ -360,9 +360,9 @@ function applyInfo(item, info) {
   return changed;
 }
 
-// ---------- AniList: fuente principal de caratulas, fondos (banner) y resumenes ----------
-// Una sola peticion trae varios titulos. Si AniList tiene el titulo, sus imagenes mandan; TMDB (secundario)
-// rellena lo que AniList no tenga.
+// ---------- AniList: fuente secundaria de caratulas, fondos (banner) y resumenes ----------
+// Una sola peticion trae varios titulos (rapido): cubre lo que TMDB aun no entrego o no tiene. En cuanto hay
+// datos de TMDB, esos mandan.
 
 const ANILIST = "https://graphql.anilist.co";
 
@@ -408,12 +408,12 @@ function anilistPick(list, title, year) {
 function applyAl(item, info) {
   if (!info) return false;
   let changed = false;
-  if (info.p) {
+  if (info.p && !item._tmp) {
     item.poster = info.p;
     item._alp = true;
     changed = true;
   }
-  if (info.b) {
+  if (info.b && !item._tmb) {
     item.backdrop = info.b;
     item._alb = true;
     changed = true;
@@ -451,36 +451,38 @@ async function anilistBatch(items) {
   return touched;
 }
 
-// Pone caratula, fondo y resumen a los titulos de la lista, en dos fases dentro del tiempo `budgetMs`:
-//  - Lo guardado se aplica siempre (instantaneo): AniList (principal) y, solo para lo que falte, TMDB.
-//  - Fase 1, AniList: todos los titulos que falten (hasta 96; 8 por peticion y 4 peticiones a la vez).
-//  - Fase 2, TMDB (secundario, hasta `cap` busquedas por llamada: limita a unas 20 cada 10 s por plugin): primero
-//    los titulos que siguen SIN imagen, luego los que solo les falta el fondo.
-// Los titulos van en el orden recibido: quien llama los intercala por fila para que lo que se ve primero se busque
-// primero. Devuelve true si cambio algo.
+// Pone caratula, fondo y resumen a los titulos de la lista (TMDB principal, AniList secundario):
+//  - Lo guardado se aplica siempre y al instante: primero TMDB y, solo donde TMDB no tiene datos, AniList.
+//  - Lo que falte se busca en paralelo y dentro del tiempo `budgetMs`: TMDB (hasta `cap` busquedas por llamada,
+//    porque limita a unas 20 cada 10 s por plugin, en el orden recibido) y AniList (rapido: 8 titulos por peticion,
+//    4 peticiones a la vez) solo para los que TMDB todavia no resolvio, de modo que nadie se queda sin imagen
+//    mientras TMDB se completa. Los datos de TMDB reemplazan a los de AniList cuando llegan.
+// El orden recibido importa: quien llama intercala las filas para que lo primero que se ve se busque primero.
+// Devuelve true si cambio algo.
 async function enrichItems(items, cap, budgetMs) {
   let touched = false;
-  const t0 = Date.now();
-  const left = function () { return budgetMs - (Date.now() - t0); };
+  const tmTodo = [];
   const alTodo = [];
   const queued = {};
   for (let i = 0; i < items.length; i++) {
     const it = items[i];
-    const al = cacheGet("al2:" + it.id);
     const tm = cacheGet("tm2:" + it.id);
-    if (al && al !== "0" && applyAl(it, JSON.parse(al))) touched = true;
+    const al = cacheGet("al2:" + it.id);
     if (tm && tm !== "0" && applyInfo(it, JSON.parse(tm))) touched = true;
-    if (!al && alTodo.length < 96 && !queued[it.id]) {
-      queued[it.id] = true;
+    if (al && al !== "0" && applyAl(it, JSON.parse(al))) touched = true;
+    if (!tm && cap > 0 && !queued["t" + it.id] && tmTodo.length < cap) {
+      queued["t" + it.id] = true;
+      tmTodo.push(it);
+    }
+    if (!al && !(tm && tm !== "0") && !queued["a" + it.id] && alTodo.length < 96) {
+      queued["a" + it.id] = true;
       alTodo.push(it);
     }
   }
-
-  // Fase 1: AniList
-  if (alTodo.length && left() > 600) {
+  if ((tmTodo.length || alTodo.length) && budgetMs > 600) {
     const chunks = [];
     for (let i = 0; i < alTodo.length; i += 8) chunks.push(alTodo.slice(i, i + 8));
-    await within(
+    const jobs = [
       mapLimit(chunks, 4, async function (chunk) {
         try {
           if (await anilistBatch(chunk)) touched = true;
@@ -488,35 +490,19 @@ async function enrichItems(items, cap, budgetMs) {
           kino.log("anilist: " + ((e && e.message) || e));
         }
       }),
-      Math.min(left(), 5000)
-    );
-  }
-
-  // Fase 2: TMDB, solo para lo que AniList no resolvio
-  if (cap > 0 && left() > 600 && typeof kino.tmdb === "function") {
-    const noImg = [];
-    const noBack = [];
-    const seen = {};
-    for (let i = 0; i < items.length; i++) {
-      const it = items[i];
-      if (seen[it.id] || cacheGet("tm2:" + it.id)) continue; // ya consultado (con o sin resultado)
-      seen[it.id] = true;
-      if (!it._alp && !it._tmp) noImg.push(it);
-      else if (!it._alb && !it._tmb) noBack.push(it);
-    }
-    const todo = noImg.concat(noBack).slice(0, cap);
-    if (todo.length) {
-      await within(
-        mapLimit(todo, 4, async function (it) {
+    ];
+    if (typeof kino.tmdb === "function") {
+      jobs.push(
+        mapLimit(tmTodo, 4, async function (it) {
           try {
             if (applyInfo(it, await tmdbInfoFor(it))) touched = true;
           } catch (e) {
             kino.log("tmdb: " + ((e && e.message) || e));
           }
-        }),
-        left()
+        })
       );
     }
+    await within(Promise.all(jobs), budgetMs);
   }
   return touched;
 }
@@ -661,10 +647,13 @@ function cardsFrom(html, opts) {
         else if (!title) title = t.replace(/\.\.\.$/, "").trim();
       }
     }
+    // Solo un titulo leido de la tarjeta (alt o h3, sin "...") se recuerda como titulo real del anime.
+    const realTitle = !!title && title.length >= 2 && !/\.\.\.$/.test(title);
     if (!title || title.length < 2) {
       title = baseSlug(slug).replace(/-/g, " ").replace(/\b\w/g, function (c) { return c.toUpperCase(); });
     }
     title = title.replace(/\s*\.\.\.\s*$/, "").trim();
+    if (realTitle) cacheSet("tt:" + slug, title, 30 * 86400000);
 
     let src = "";
     const ds = /data-src=["']([^"']+)["']/i.exec(box);
@@ -759,8 +748,9 @@ function latestCards(html) {
     const epSlug = m[1];
     if (!epSlug || seen[epSlug]) continue;
     seen[epSlug] = true;
-    const title = bestTitle(slice.slice(Math.max(0, m.index - 800), m.index + 1000), epSlug);
     const animeSlug = epSlug + "-sub-espanol";
+    // Titulo real recordado de otra lista (/emision, /animes, busquedas); si no hay, el mejor del HTML o el del slug.
+    const title = cacheGet("tt:" + animeSlug) || bestTitle(slice.slice(Math.max(0, m.index - 800), m.index + 1000), epSlug);
     const poster = cacheGet("pm:" + animeSlug) || "";
     const year = cacheGet("yr1:" + animeSlug) || "";
     const item = mkItem(animeSlug, title, poster, false, year);
@@ -929,21 +919,29 @@ function saveRow(row, t) {
   } catch (e) {}
 }
 
+// Fila "En emision": los animes de "Ultimos capitulos" de la portada. Los capitulos no traen el titulo real ni la
+// caratula (solo una captura del episodio), asi que ademas se leen las primeras paginas de /emision (el listado de
+// estrenos de la temporada, con titulo y año reales) y de ahi se recuerdan los titulos de cada anime.
+async function loadEmision() {
+  const pages = await Promise.all([
+    getPage(BASE + "/"),
+    getPage(BASE + "/emision", null, 9000).catch(function () { return null; }),
+    getPage(BASE + "/emision?p=2", null, 9000).catch(function () { return null; }),
+  ]);
+  if (pages[1]) cardsFrom(pages[1].html);
+  if (pages[2]) cardsFrom(pages[2].html);
+  return latestCards(pages[0].html).slice(0, 30);
+}
+
+function hasImage(it) {
+  return !!(it._tmp || it._alp);
+}
+
 export async function home() {
   T0 = Date.now();
   const en = lang() === "en";
   const defs = [
-    {
-      id: "emision",
-      title: en ? "Airing now" : "En emisión",
-      ref: "emision",
-      genre: "anime",
-      load: async function () {
-        // Los animes de "Últimos capítulos" de la portada, en su orden.
-        const page = await getPage(BASE + "/");
-        return latestCards(page.html).slice(0, 30);
-      },
-    },
+    { id: "emision", title: en ? "Airing now" : "En emisión", ref: "emision", genre: "anime", load: loadEmision },
     {
       id: "animes",
       title: en ? "Anime" : "Animes",
@@ -965,6 +963,8 @@ export async function home() {
       },
     },
   ];
+
+  // 1) Filas: copia guardada si es reciente; si no, se pide al sitio dentro de una ventana (ver refreshWindow).
   const loaded = {};
   const copyTime = {};
   const rows = await Promise.all(
@@ -981,7 +981,7 @@ export async function home() {
       if (has) copyTime[d.id] = old.t;
       if (has && age < ROW_FRESH_MS) return mk(old.row.items);
       try {
-        const win = has ? refreshWindow(age) : Math.max(4000, timeLeft() - 3500);
+        const win = has ? refreshWindow(age) : Math.max(4000, timeLeft() - 6000);
         const items = await within(d.load(), win);
         if (items === LATE) throw new Error("el sitio no alcanzo en " + win + " ms");
         if (!items.length) throw new Error("sin elementos");
@@ -995,8 +995,8 @@ export async function home() {
   );
   const shown = rows.filter(Boolean);
 
-  // TMDB (caratulas, fondos): lo guardado se aplica siempre; consultas nuevas, unas pocas por apertura.
-  // Se intercalan las filas (1.º de cada fila, 2.º de cada fila...) para que lo que se ve primero se busque primero.
+  // 2) Imagenes: se intercalan las filas (1.º de cada una, 2.º de cada una...) y se esperan ANTES de responder, porque
+  //    Kino conserva la primera respuesta del inicio. Con carga nueva se espera hasta 10 s; con copias, solo 1,5 s.
   const all = [];
   const longest = shown.reduce(function (n, row) { return Math.max(n, row.items.length); }, 0);
   for (let i = 0; i < longest; i++) {
@@ -1007,17 +1007,20 @@ export async function home() {
   let changed = false;
   if (all.length) {
     try {
-      // Kino conserva la primera respuesta del inicio: si hubo carga nueva se espera mas para entregarla con imagenes.
       const anyLoaded = Object.keys(loaded).length > 0;
-      const budget = Math.max(0, Math.min(anyLoaded ? 8000 : 1500, timeLeft() - 2500));
-      changed = await enrichItems(all, 18, budget);
+      const budget = Math.max(0, Math.min(anyLoaded ? 10000 : 1500, timeLeft() - 2500));
+      changed = await enrichItems(all, 14, budget); // 14 titulos x hasta 2 busquedas queda bajo el limite de TMDB (~20 cada 10 s)
     } catch (e) {
-      kino.log("tmdb inicio: " + ((e && e.message) || e));
+      kino.log("imagenes inicio: " + ((e && e.message) || e));
     }
   }
+
+  // 3) Copias: una fila con titulos todavia sin imagen se guarda "recien vencida" (45 s) para que la proxima apertura
+  //    siga completandola en vez de darla por buena durante 10 minutos.
   shown.forEach(function (row) {
-    if (loaded[row.id]) saveRow(row);
-    else if (changed && copyTime[row.id]) saveRow(row, copyTime[row.id]); // copia vieja con datos nuevos: conserva su edad
+    const incomplete = row.items.some(function (it) { return !hasImage(it); });
+    if (loaded[row.id]) saveRow(row, incomplete ? Date.now() - ROW_FRESH_MS + 45000 : undefined);
+    else if (changed && copyTime[row.id]) saveRow(row, incomplete ? Date.now() - ROW_FRESH_MS + 45000 : copyTime[row.id]);
   });
   return shown.map(function (row) {
     return Object.assign({}, row, { items: publicItems(row.items) });

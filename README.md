@@ -13,9 +13,20 @@ Plugin de Kino (apiVersion 6) para [MonosChinos](https://monoschinos.st): busca 
 | **Película** | Un solo botón de reproducir (capítulo 1 del sitio). |
 | **Reproducir / Descargar** | Voe, MixDrop, Mp4Upload, LuluStream, SaveFiles, Doodstream, Filemoon y otros; el que no elijas queda en el menú Servidor. |
 
+## Qué cambió en la 3.9.0 (catálogo rehecho)
+
+**Qué pasaba.** "Ver más" cargaba todas las carátulas al instante y el inicio no, aunque los datos eran los mismos. El motivo principal era el título: las filas de En emisión se arman con capítulos (`/ver/<slug>-episodio-N`), que no traen el título real, solo un botón "Ver ahora" y el slug. AniList y TMDB buscaban ese título aproximado y no encontraban nada; en "Ver más" las tarjetas vienen de `/emision`, que sí trae el título real, y por eso allí todo cargaba. Al abrir la ficha también funcionaba, porque usa el título real de la página del anime. Además, una fila con títulos sin imagen se daba por buena durante 10 minutos.
+
+**Qué cambió.**
+- **Títulos reales para En emisión.** La fila lee, además de la portada, las páginas 1 y 2 de `/emision` y recuerda el título de cada anime (`tt:<slug>`, 30 días). Todas las listas, búsquedas y "Ver más" también alimentan esa memoria. Si un anime no aparece en ninguna, se usa el mejor texto cercano al enlace o el slug.
+- **TMDB vuelve a ser la fuente principal** de carátulas y fondos; AniList es el respaldo inmediato (8 títulos por petición, 4 peticiones a la vez) para lo que TMDB todavía no resolvió, así nadie se queda en negro mientras TMDB se completa. Cuando los datos de TMDB llegan, reemplazan a los de AniList.
+- **El inicio espera las imágenes antes de responder** (hasta 10 s con carga nueva; con copia guardada, 1,5 s), porque Kino conserva la primera respuesta. Las filas se intercalan (1.º de cada fila, 2.º de cada fila…) para buscar primero lo que se ve primero.
+- **Copias que no se dan por buenas si están incompletas.** Una fila con títulos sin imagen se guarda "recién vencida" (45 s) para que la siguiente apertura siga completándola.
+- TMDB: hasta 14 títulos nuevos por apertura (cada uno puede gastar 2 búsquedas; el límite es de unas 20 cada 10 s).
+
 ## Qué cambió en la 3.8.0
 
-- **AniList es la fuente principal y TMDB la secundaria** para carátulas y fondos de las listas. Si AniList tiene el título, sus imágenes mandan; TMDB solo rellena lo que AniList no trajo (una carátula que falta o un fondo/banner que falta).
+- **(Revertido en la 3.9.0: TMDB vuelve a ser la principal.)** AniList era la fuente principal y TMDB la secundaria.
 - **Dos fases en orden:** primero AniList para todos los títulos que falten (hasta 96, 8 por petición, 4 peticiones a la vez); después TMDB, empezando por los títulos que siguen **sin ninguna imagen** (los que se veían en negro) y luego por los que solo les falta el fondo. Hasta 18 búsquedas de TMDB por apertura (su límite es de unas 20 cada 10 s).
 - **Carátulas más livianas.** Se usa la versión `large` de AniList (unas 3 o 4 veces más liviana que `extraLarge`), así cargan antes en la lista.
 - **AniList acepta el título aunque el año no coincida** si el nombre es muy parecido (80 % de las palabras).
@@ -94,6 +105,7 @@ Sin cambios respecto a la 3.4.0: la ficha trae un `data-ajax` con el listado (pa
 | Clave | Contenido | Duración |
 | --- | --- | --- |
 | `row3:<fila>` | Última copia buena de cada fila del inicio | 12 horas |
+| `tt:<slug>` | Título real del anime leído de una tarjeta | 30 días |
 | `tm2:<slug>` | Carátula, fondo, resumen y año de TMDB (`0` si no hubo) | 14 días (1 día si no hubo) |
 | `al2:<slug>` | Carátula, banner y resumen de AniList (`0` si no hubo) | 14 días (1 día si no hubo) |
 | `tmdb3:<slug>` | Títulos, imágenes y resúmenes de capítulos | 6 horas |
