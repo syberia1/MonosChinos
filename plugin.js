@@ -344,37 +344,127 @@ function applyInfo(item, info) {
   if (info.b) item.backdrop = info.b;
   if (info.o && !item.overview) item.overview = info.o;
   if (info.y && !item.year) item.year = info.y;
+  item._tm = true; // TMDB manda sobre AniList
   return !!(info.p || info.b);
 }
 
-// Pone caratula, fondo y resumen de TMDB a los titulos de la lista. Lo guardado se aplica siempre (instantaneo);
-// las consultas nuevas son como mucho `cap` por llamada (TMDB limita a unas 20 cada 10 s por plugin), con tiempo
-// maximo. Devuelve true si cambio algo.
+// ---------- AniList: respaldo de caratulas, fondos (banner) y resumenes ----------
+// Una sola peticion trae varios titulos. Sus carátulas valen cuando TMDB no tiene (o aun no entrego) el titulo;
+// en cuanto hay datos de TMDB, esos mandan.
+
+const ANILIST = "https://graphql.anilist.co";
+
+function stripHtml(s) {
+  return decodeHtml(String(s || "").replace(/<br\s*\/?>/gi, " ").replace(/<[^>]+>/g, " ")).replace(/\s+/g, " ").trim();
+}
+
+function anilistPick(list, title, year) {
+  const sp = splitTitle(title);
+  const q = sp.base.length >= 2 ? sp.base : title;
+  for (let i = 0; i < (list || []).length; i++) {
+    const m = list[i];
+    if (!m) continue;
+    const poster = m.coverImage && (m.coverImage.extraLarge || m.coverImage.large);
+    if (!poster) continue;
+    const t = m.title || {};
+    const names = [t.romaji, t.english, t.native].filter(Boolean).join(" ");
+    const loose = looseMatch({ name: names }, q);
+    const y = m.seasonYear || (m.startDate && m.startDate.year) || 0;
+    let ok;
+    if (sp.marked && sp.season > 1) ok = loose;
+    else if (year && y) ok = Math.abs(year - y) <= 1;
+    else ok = loose;
+    if (ok) {
+      return {
+        p: poster,
+        b: m.bannerImage || "",
+        o: stripHtml(m.description).slice(0, 700),
+        y: y ? String(y) : "",
+      };
+    }
+  }
+  return null;
+}
+
+function applyAl(item, info) {
+  if (!info || item._tm) return false;
+  if (info.p) item.poster = info.p;
+  if (info.b) item.backdrop = info.b;
+  if (info.o && !item.overview) item.overview = info.o;
+  if (info.y && !item.year) item.year = info.y;
+  return !!(info.p || info.b);
+}
+
+// Busca varios titulos en una sola peticion; guarda cada resultado (14 dias; 1 dia si no hubo) y lo aplica.
+// Lanza ante un fallo de red o de AniList para no guardar un "no hay" falso.
+async function anilistBatch(items) {
+  if (!items.length) return false;
+  const fields = "title{romaji english native}coverImage{large extraLarge}bannerImage seasonYear startDate{year}description(asHtml:false)";
+  const parts = items.map(function (it, i) {
+    const sp = splitTitle(it.title);
+    const q = (sp.base.length >= 2 ? sp.base : it.title).slice(0, 90);
+    return "a" + i + ":Page(page:1,perPage:3){media(search:" + JSON.stringify(q) + ",type:ANIME){" + fields + "}}";
+  });
+  const r = await kino.fetch(ANILIST, {
+    method: "POST",
+    headers: { "User-Agent": UA, "Content-Type": "application/json", Accept: "application/json" },
+    body: JSON.stringify({ query: "query{" + parts.join(" ") + "}" }),
+    timeoutMs: 9000,
+  });
+  if (!r || !r.ok) throw new Error("AniList HTTP " + (r ? r.status : 0));
+  const data = (JSON.parse(bodyText(r)) || {}).data || {};
+  let touched = false;
+  items.forEach(function (it, i) {
+    const list = ((data["a" + i] || {}).media) || [];
+    const info = anilistPick(list, it.title, parseInt(it.year, 10) || 0);
+    cacheSet("al2:" + it.id, info ? JSON.stringify(info) : "0", (info ? 14 : 1) * 86400000);
+    if (applyAl(it, info)) touched = true;
+  });
+  return touched;
+}
+
+// Pone caratula, fondo y resumen a los titulos de la lista. Lo guardado se aplica siempre (instantaneo): primero
+// AniList y encima TMDB. Lo que falte se busca en AniList (hasta 24 titulos, en bloques de 8) y en TMDB (hasta
+// `cap` por llamada: TMDB limita a unas 20 cada 10 s por plugin), en paralelo y con tiempo maximo.
+// Devuelve true si cambio algo.
 async function enrichItems(items, cap, budgetMs) {
   let touched = false;
   let fresh = 0;
-  const todo = [];
+  const tmTodo = [];
+  const alTodo = [];
   for (let i = 0; i < items.length; i++) {
     const it = items[i];
-    const hit = cacheGet("tm2:" + it.id);
-    if (hit) {
-      if (hit !== "0" && applyInfo(it, JSON.parse(hit))) touched = true;
+    const tm = cacheGet("tm2:" + it.id);
+    const al = cacheGet("al2:" + it.id);
+    if (al && al !== "0" && applyAl(it, JSON.parse(al))) touched = true;
+    if (tm) {
+      if (tm !== "0" && applyInfo(it, JSON.parse(tm))) touched = true;
     } else if (fresh < cap) {
       fresh++;
-      todo.push(it);
+      tmTodo.push(it);
     }
+    if (!al && !(tm && tm !== "0") && alTodo.length < 24) alTodo.push(it);
   }
-  if (todo.length && budgetMs > 600) {
-    await within(
-      mapLimit(todo, 4, async function (it) {
+  if ((tmTodo.length || alTodo.length) && budgetMs > 600) {
+    const chunks = [];
+    for (let i = 0; i < alTodo.length; i += 8) chunks.push(alTodo.slice(i, i + 8));
+    const jobs = [
+      mapLimit(chunks, 2, async function (chunk) {
+        try {
+          if (await anilistBatch(chunk)) touched = true;
+        } catch (e) {
+          kino.log("anilist: " + ((e && e.message) || e));
+        }
+      }),
+      mapLimit(tmTodo, 4, async function (it) {
         try {
           if (applyInfo(it, await tmdbInfoFor(it))) touched = true;
         } catch (e) {
           kino.log("tmdb: " + ((e && e.message) || e));
         }
       }),
-      budgetMs
-    );
+    ];
+    await within(Promise.all(jobs), budgetMs);
   }
   return touched;
 }
@@ -509,8 +599,8 @@ function cardsFrom(html, opts) {
     seen[slug] = true;
 
     let title = "";
-    const al = /alt=["']([^"']+)["']/i.exec(box);
-    if (al) title = decodeHtml(al[1]).replace(/\s+/g, " ").trim();
+    const al = /alt=(?:"([^"]+)"|'([^']+)')/i.exec(box);
+    if (al) title = decodeHtml(al[1] || al[2]).replace(/\s+/g, " ").trim();
     if (!title || /\.\.\.$/.test(title)) {
       const h3 = /<h3[^>]*>([^<]{2,220})/i.exec(box);
       if (h3) {
@@ -553,8 +643,51 @@ function publicItems(items) {
   return items.map(function (it) {
     const c = Object.assign({}, it);
     delete c.type;
+    delete c._tm;
     return c;
   });
+}
+
+// Titulo de un capitulo de la portada: se elige, entre los alt/title/encabezados cercanos al enlace, el que mas se
+// parece al slug (asi no se confunde con el boton "Ver ahora" ni con la tarjeta vecina). Si ninguno se parece,
+// se arma desde el slug.
+function humanizeSlug(slug) {
+  const small = { no: 1, wa: 1, to: 1, ga: 1, de: 1, ni: 1, wo: 1, o: 1, mo: 1, na: 1, ka: 1, the: 1, of: 1 };
+  return String(slug)
+    .split("-")
+    .filter(Boolean)
+    .map(function (w, i) {
+      return i > 0 && small[w] ? w : w.charAt(0).toUpperCase() + w.slice(1);
+    })
+    .join(" ");
+}
+
+function bestTitle(win, slug) {
+  const sw = norm(String(slug).replace(/-/g, " ")).split(" ").filter(Boolean);
+  const raws = [];
+  let m;
+  const reA = /(?:alt|title)=(?:"([^"]{3,160})"|'([^']{3,160})')/gi;
+  while ((m = reA.exec(win))) raws.push(m[1] || m[2]);
+  const reH = /<h[1-6][^>]*>\s*([^<]{3,160})</gi;
+  while ((m = reH.exec(win))) raws.push(m[1]);
+  const reT = /<a\b[^>]*>\s*([^<]{3,160})</gi;
+  while ((m = reT.exec(win))) raws.push(m[1]);
+  let best = "";
+  let bestScore = 0;
+  for (let i = 0; i < raws.length; i++) {
+    let c = decodeHtml(raws[i]).replace(/\s+/g, " ").trim();
+    c = c.replace(/^Ver\s+(?:Anime\s+)?/i, "").split(/\s+cap[ií]tulo\s+\d+/i)[0].replace(/\s+online\b.*$/i, "").trim();
+    if (!c || c.length < 2) continue;
+    if (/^(ver|ahora|ver ahora|episodio|cap[ií]tulo|banner|poster|imagen|logo|sub espa[nñ]ol|anime)$/i.test(c)) continue;
+    const words = norm(c).split(" ");
+    const hit = sw.filter(function (w) { return words.indexOf(w) >= 0; }).length;
+    const score = sw.length ? hit / sw.length : 0;
+    if (score > bestScore) {
+      bestScore = score;
+      best = c;
+    }
+  }
+  return bestScore >= 0.5 ? best : humanizeSlug(slug);
 }
 
 // "Ultimos capitulos" de la portada -> animes (sin repetir), con el orden del sitio.
@@ -565,21 +698,13 @@ function latestCards(html) {
   const slice = a >= 0 ? src.slice(a, b > a ? b : a + 80000) : src;
   const items = [];
   const seen = {};
-  const re = /<a\b[^>]*href=["']([^"']*\/ver\/([^"'/?#]+?)-episodio-(\d+))["'][^>]*>([\s\S]*?)<\/a>/gi;
+  const re = /\/ver\/([A-Za-z0-9._~-]+?)-episodio-(\d+)/g;
   let m;
   while ((m = re.exec(slice))) {
-    const epSlug = m[2];
+    const epSlug = m[1];
     if (!epSlug || seen[epSlug]) continue;
     seen[epSlug] = true;
-    const inner = m[4];
-    let title = "";
-    const al = /alt=["']([^"']+)["']/i.exec(inner);
-    if (al) title = decodeHtml(al[1]);
-    if (!title || /cap[ií]tulo\s+\d+/i.test(title) === false) {
-      const text = decodeHtml(inner.replace(/<[^>]+>/g, " ")).replace(/\s+/g, " ").trim();
-      if (!title) title = text;
-    }
-    title = String(title).split(/\s+cap[ií]tulo\s+\d+/i)[0].replace(/\s+/g, " ").trim();
+    const title = bestTitle(slice.slice(Math.max(0, m.index - 800), m.index + 1000), epSlug);
     const animeSlug = epSlug + "-sub-espanol";
     const poster = cacheGet("pm:" + animeSlug) || "";
     const year = cacheGet("yr1:" + animeSlug) || "";
@@ -1034,6 +1159,22 @@ export async function episodes(ref) {
       if (info.b) series.backdrop = info.b;
       if (info.o && (series.overview || "").length < 80) series.overview = info.o;
       if (info.y && !series.year) series.year = info.y;
+    } else if (left() > 2500) {
+      // Sin datos de TMDB: AniList (caratula, banner y resumen).
+      const probe = { id: slug, title: series.title, year: year ? String(year) : "" };
+      try {
+        await within(anilistBatch([probe]), Math.min(3500, left() - 1000));
+      } catch (e) {
+        kino.log("anilist ficha: " + ((e && e.message) || e));
+      }
+      const al = cacheGet("al2:" + slug);
+      if (al && al !== "0") {
+        const ai = JSON.parse(al);
+        if (ai.p) series.poster = ai.p;
+        if (ai.b) series.backdrop = ai.b;
+        if (ai.o && (series.overview || "").length < 80) series.overview = ai.o;
+        if (ai.y && !series.year) series.year = ai.y;
+      }
     }
   } catch (e) {
     kino.log("tmdb ficha: " + ((e && e.message) || e));

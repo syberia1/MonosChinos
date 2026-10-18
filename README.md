@@ -13,9 +13,15 @@ Plugin de Kino (apiVersion 6) para [MonosChinos](https://monoschinos.st): busca 
 | **Película** | Un solo botón de reproducir (capítulo 1 del sitio). |
 | **Reproducir / Descargar** | Voe, MixDrop, Mp4Upload, LuluStream, SaveFiles, Doodstream, Filemoon y otros; el que no elijas queda en el menú Servidor. |
 
+## Qué cambió en la 3.6.0
+
+- **AniList de respaldo para carátulas y fondos.** Una sola petición trae hasta 8 títulos (hasta 24 por apertura del inicio) con su carátula, su banner (que sirve de fondo en las tarjetas de la tele) y su resumen. Se aplican primero; en cuanto TMDB tiene datos del título, esos mandan. Se valida por año (±1) o, en temporadas marcadas ("S3", "Temporada 2"), por el parecido del nombre. Así la primera apertura ya muestra imágenes aunque TMDB tarde o no tenga el título.
+- **Títulos de En emisión corregidos.** Las tarjetas de "Últimos capítulos" traen un botón "Ver ahora"; el plugin lo tomaba como título. Ahora elige, entre los `alt`, `title` y encabezados cercanos al enlace, el que más se parece al slug del capítulo; si ninguno se parece, arma el título desde el slug.
+- **Títulos con apóstrofe** ("JoJo's", "Journey's End") ya no se cortan.
+
 ## Qué cambió en la 3.5.0
 
-- **Carátulas y fondos desde TMDB**, no desde AniList ni Kitsu (se quitaron del código y de los hosts). La imagen propia del sitio solo se usa si TMDB no tiene una coincidencia segura.
+- **Carátulas y fondos desde TMDB** (Kitsu se quitó). La imagen propia del sitio solo se usa si TMDB y AniList no tienen una coincidencia segura.
 - **Imágenes de capítulos desde TMDB.** Las del sitio y la carátula de relleno ya no se usan: si TMDB no tiene el capítulo, queda sin imagen y Kino pone la suya.
 - **En emisión = "Últimos capítulos".** Se leen los capítulos de la portada, se agrupan por anime y se muestran en su orden.
 - **Películas de vuelta.** Antes la fila se saltaba por tiempo: las filas se cargaban una tras otra y la tercera ya no cabía en los 20 segundos de Kino. Ahora se cargan en paralelo, con copia guardada y tiempo máximo por fila.
@@ -63,6 +69,7 @@ Sin cambios respecto a la 3.4.0: la ficha trae un `data-ajax` con el listado (pa
 | --- | --- | --- |
 | `row3:<fila>` | Última copia buena de cada fila del inicio | 12 horas |
 | `tm2:<slug>` | Carátula, fondo, resumen y año de TMDB (`0` si no hubo) | 14 días (1 día si no hubo) |
+| `al2:<slug>` | Carátula, banner y resumen de AniList (`0` si no hubo) | 14 días (1 día si no hubo) |
 | `tmdb3:<slug>` | Títulos, imágenes y resúmenes de capítulos | 6 horas |
 | `pm:<slug>` | Carátula del propio sitio (respaldo) | 14 días |
 | `yr1:<slug>` | Año visto en el catálogo | 30 días |
@@ -76,14 +83,14 @@ Activa **Modo debug** en la pestaña del plugin; el registro dice qué fila o pa
 | --- | --- |
 | En emisión vacía | `latestCards()`: busca el bloque entre "Últimos capítulos" y "Series recientes" y enlaces `/ver/<slug>-episodio-N` |
 | Películas vacías | El registro dice qué URLs probó (`peliculas? … -> N tarjetas`); `moviesFilterCandidates()` |
-| Sin carátulas o fondos | TMDB no encontró una coincidencia segura (`pickShow()`), o aún falta completar (abre el inicio otra vez) |
+| Sin carátulas o fondos | Ni TMDB (`pickShow()`) ni AniList (`anilistPick()`) encontraron una coincidencia segura, o aún falta completar (abre el inicio otra vez). El registro muestra `tmdb:` o `anilist:` con el motivo |
 | Capítulos sin imagen | TMDB no tiene esa serie o su numeración no coincide; el registro muestra cuántos capítulos tuvieron imagen |
 | Ver más repite la primera página | Parámetro de página: `?p=N` |
 
 ## Límites conocidos
 
 - **Parte del HTML no se pudo comprobar desde fuera:** el formato exacto de las tarjetas de "Últimos capítulos" y el filtro de películas se escribieron según lo visible en las páginas y el código anterior; el plugin los verifica en ejecución y deja el motivo en el registro.
-- **Cloudflare:** el sitio puede bloquear el cargador de imágenes de Kino (por eso las carátulas salen de TMDB). Las imágenes propias del sitio son solo respaldo.
+- **Cloudflare:** el sitio bloquea el cargador de imágenes de Kino (por eso las carátulas salen de TMDB y AniList). Las imágenes propias del sitio son solo el último respaldo.
 - **Dominio:** el activo es `monoschinos.st`. Si cambia, actualiza `BASE` y `hosts`.
 - **Sin Mega.**
 
