@@ -1,10 +1,10 @@
 {
   "id": "monoschinos",
   "name": "MonosChinos",
-  "version": "3.9.0",
+  "version": "3.10.0",
   "apiVersion": 6,
   "entry": "plugin.js",
-  "description": "Anime subtitulado de monoschinos.st. En emisión (últimos capítulos), animes y películas, con carátulas y fondos de TMDB (principal) y AniList (respaldo inmediato) e imágenes de capítulos de TMDB.",
+  "description": "Anime subtitulado de monoschinos.st. En emisión (últimos capítulos), animes y películas, con carátulas y fondos de TMDB (principal) y AniList (respaldo inmediato) e imágenes de capítulos de TMDB. Servidores: MixDrop, Mp4Upload, LuluStream, Uqload, Ok.ru, ObeyWish, Doodstream, Voe y Filemoon (Voe y Filemoon con navegador oculto).",
   "author": "tu-usuario-de-github",
   "hosts": [
     "graphql.anilist.co",
@@ -49,8 +49,60 @@
     "ahvsh.com",
     "vidhide.com",
     "vidhidepro.com",
-    "hqq.tv",
-    "waaw.tv"
+    "mixdrop.ps",
+    "mixdrop.ch",
+    "mixdrop.to",
+    "mdfx9dc8n.net",
+    "mdbekjwqa.pw",
+    "uqload.is",
+    "uqload.io",
+    "uqload.net",
+    "uqload.cx",
+    "uqload.to",
+    "uqload.ws",
+    "uqload.bz",
+    "ok.ru",
+    "www.ok.ru",
+    "m.ok.ru",
+    "odnoklassniki.ru",
+    "obeywish.com",
+    "embedwish.com",
+    "hlswish.com",
+    "awish.pro",
+    "strwish.com",
+    "wishfast.top",
+    "voe-unblock.com",
+    "voeunblock.com",
+    "d-s.io",
+    "ds2play.com",
+    "ds2video.com",
+    "playmogo.com",
+    "myvidplay.com",
+    "vide0.net",
+    "d000d.com",
+    "d0000d.com",
+    "dood.so",
+    "dood.to",
+    "dood.sh",
+    "dood.cx",
+    "dood.wf",
+    "dood.re",
+    "dood.yt",
+    "dood.stream",
+    "dood.work",
+    "dood.li",
+    "dooood.com",
+    "filemoon.in",
+    "filemoon.nl",
+    "filemoon.link",
+    "filemoon.wf",
+    "bysezoxexe.com",
+    "bysesayeveum.com",
+    "bysebuho.com",
+    "bysedikamoum.com",
+    "bysejikuar.com",
+    "bysevepoin.com",
+    "f16px.com"
   ],
   "streamHosts": "any",
   "capabilities": [
@@ -73,7 +125,7 @@
       "label": "Servidor preferido",
       "type": "select",
       "default": "mixdrop",
-      "hint": "Se intenta primero; el resto queda en el menu Servidor.",
+      "hint": "Se intenta primero; el resto queda en el menu Servidor. Voe y Filemoon usan el navegador oculto.",
       "options": [
         {
           "value": "mixdrop",
@@ -88,8 +140,16 @@
           "label": "LuluStream"
         },
         {
-          "value": "voe",
-          "label": "Voe"
+          "value": "uqload",
+          "label": "Uqload"
+        },
+        {
+          "value": "okru",
+          "label": "Ok.ru"
+        },
+        {
+          "value": "obeywish",
+          "label": "ObeyWish"
         },
         {
           "value": "savefiles",
@@ -100,10 +160,15 @@
           "label": "Doodstream"
         },
         {
+          "value": "voe",
+          "label": "Voe"
+        },
+        {
           "value": "filemoon",
           "label": "Filemoon"
         }
       ]
     }
-  ]
+  ],
+  "browser": true
 }

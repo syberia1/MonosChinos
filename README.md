@@ -11,7 +11,29 @@ Plugin de Kino (apiVersion 6) para [MonosChinos](https://monoschinos.st): busca 
 | **Ver más** | En emisión → `/emision?p=N` (animes de estreno de la temporada); Animes → `/animes?p=N`; Películas → el filtro de tipo Película del catálogo. |
 | **Ficha** | Título, sinopsis, año, carátula y fondo de TMDB, y lista de capítulos con título, imagen, resumen, fecha y duración de TMDB. |
 | **Película** | Un solo botón de reproducir (capítulo 1 del sitio). |
-| **Reproducir / Descargar** | Voe, MixDrop, Mp4Upload, LuluStream, SaveFiles, Doodstream, Filemoon y otros; el que no elijas queda en el menú Servidor. |
+| **Reproducir / Descargar** | MixDrop, Mp4Upload, LuluStream, Uqload, Ok.ru, ObeyWish, SaveFiles, Doodstream, Voe y Filemoon; el que no elijas queda en el menú Servidor. |
+
+## Qué cambió en la 3.10.0 (servidores de reproducción)
+
+**Qué pasaba.** Solo MixDrop abría. Causas encontradas en el código:
+- El desempaquetador de `eval(function(p,a,c,k,e,d)…)` usaba `Number.toString(radix)`, que no pasa de base 36. Los reproductores empaquetados en base 62 (el valor por defecto de ese empaquetador) fallaban en silencio. Además solo se desempaquetaba el primer bloque de la página.
+- Las URL salían con `\/` dentro del script desempaquetado y los patrones no las reconocían; tampoco se leía `links={"hls4":…}` (StreamWish/ObeyWish/Lulu) ni las rutas relativas.
+- Ok.ru, Uqload y ObeyWish no estaban reconocidos (Ok.ru no tenía lector; Uqload y ObeyWish caían en "genérico" y sus dominios no estaban en `hosts`).
+- Filemoon (Byse) y Voe arman el video con JavaScript y Voe cambia de dominio; con `kino.fetch` no se puede.
+
+**Qué cambió.**
+- **Desempaquetador** con base hasta 62, todos los bloques y bloques anidados. Búsqueda de la URL de video más tolerante y con filtro de anuncios.
+- **Ok.ru** nuevo: lee `data-options` de `/videoembed/<id>` (HLS o la mejor calidad) con Referer `https://ok.ru/`.
+- **Voe y Filemoon** por el **navegador oculto** (`"browser": true`, `kino.browser.capture`). Si el equipo no lo tiene o la persona no lo aprobó, se saltan sin demorar el resto.
+- **Respaldo por navegador oculto** para cualquier otro servidor que falle con `kino.fetch` (salvo video borrado), si queda tiempo.
+- **Enlaces de descarga/ficha** (`/d/`, `/f/`, `uqload…/id.html`, `mp4upload…/id`) se convierten al reproductor incrustado.
+- **Salud por servidor:** si un servidor falla 4 veces seguidas sin ningún éxito, pasa al final de la lista durante 6 horas (sigue en el menú Servidor); un éxito lo devuelve a su lugar. Así la lista se ordena sola según lo que funcione en tu Kino.
+- **Calidad en el nombre y orden por calidad.** Los servidores que abren con `kino.fetch` se prueban en paralelo y la lista sale ordenada de mayor a menor calidad (por ejemplo "ObeyWish · 1080p", "MixDrop · 720p"). A igual calidad manda el servidor preferido y luego el orden fijo. La altura sale de la lista de calidades de Ok.ru, de pistas en la URL o el reproductor ("1080p") y, si `kino.fetchAnyHost` es `true`, de `RESOLUTION=` del manifiesto HLS. Si no se puede medir, se usa la última calidad vista de ese servidor (24 h) o el nombre queda sin calidad y va después de los medidos. Voe y Filemoon (navegador oculto) solo se abren si ninguno de los otros funcionó; mientras tanto aparecen como alternativas.
+- **Quitados:** Netu/HQQ/Waaw (cifrado y captcha) y Mega (ya se saltaba).
+- **Tiempo:** con el navegador oculto aprobado, `resolve` usa hasta ~68 s; sin él, 18,5 s como antes. Las páginas de reproductor se piden con 10 s de límite.
+- `hosts` ampliado con los dominios de Uqload, Ok.ru, ObeyWish, Doodstream, Filemoon/Byse y Voe. **Al actualizar, Kino pedirá aprobar de nuevo** (el navegador oculto sale en rojo en la pantalla de permisos).
+
+**Si un servidor sigue sin abrir:** activa "Modo debug", abre un capítulo y mira el registro; cada intento deja una línea (`MixDrop OK…`, `Voe captura timeout`, `Uqload sin video`…). Si el dominio del embed no está en `hosts`, Kino pregunta "¿Permitir?" (fetch) o la captura termina en `blocked`: añade ese dominio a `hosts`.
 
 ## Qué cambió en la 3.9.0 (catálogo rehecho)
 

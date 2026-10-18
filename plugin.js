@@ -32,6 +32,8 @@ function reasonOf(e) {
   if (h) return "HTTP " + h[1];
   if (/timeout|tardo|took too long/i.test(m)) return "tardo demasiado";
   if (/sin video/i.test(m)) return "sin video";
+  const c = /captura (\w+)/i.exec(m);
+  if (c) return "navegador oculto: " + c[1];
   if (/SPA|protegido|bloqueado/i.test(m)) return m.slice(0, 80);
   if (/network|Unable to resolve/i.test(m)) return "sin conexion";
   return "fallo";
@@ -1253,29 +1255,67 @@ export async function episodes(ref) {
   return { series: series, episodes: list };
 }
 
+// ---------- Servidores de reproduccion ----------
+// Cada servidor se abre por una de dos vias:
+//  1) kino.fetch + lectura del HTML (MixDrop, Mp4Upload, LuluStream, Uqload, ObeyWish, Ok.ru, Doodstream...)
+//  2) kino.browser.capture (navegador oculto) para los que cargan el video con JavaScript (Voe, Filemoon/Byse)
+//     y como respaldo cuando la via 1 falla.
+
+const DESKTOP_UA =
+  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36";
+
 const KIND_LABEL = {
-  voe: "Voe", filemoon: "Filemoon", streamwish: "StreamWish", dood: "Doodstream",
+  voe: "Voe", filemoon: "Filemoon", streamwish: "StreamWish", obeywish: "ObeyWish", dood: "Doodstream",
   mixdrop: "MixDrop", mp4upload: "Mp4Upload", lulu: "LuluStream", vidhide: "Vidhide",
-  uqload: "Uqload", savefiles: "SaveFiles", hexload: "Hexload", netu: "Netu", generic: "Servidor",
+  uqload: "Uqload", okru: "Ok.ru", savefiles: "SaveFiles", hexload: "Hexload", generic: "Servidor",
+};
+
+// Orden de prueba: primero los que se abren rapido con kino.fetch, al final los que usan navegador oculto.
+const KIND_ORDER = {
+  mixdrop: 1, mp4upload: 2, lulu: 3, uqload: 4, okru: 5, obeywish: 6, savefiles: 7,
+  dood: 8, voe: 9, filemoon: 10, generic: 15, vidhide: 16, hexload: 17, streamwish: 18,
 };
 
 function detectKind(name, url) {
   const n = String(name || "");
   const u = String(url || "");
-  if (/mixdrop|mxdrop/i.test(n) || /mixdrop\.|mxdrop\./i.test(u)) return "mixdrop";
-  if (/mp4upload/i.test(n) || /mp4upload\./i.test(u)) return "mp4upload";
-  if (/lulu/i.test(n) || /lulu(vdo|stream)/i.test(u)) return "lulu";
-  if (/voe/i.test(n) || /voe\./i.test(u)) return "voe";
-  if (/uqload/i.test(n) || /uqload\./i.test(u)) return "uqload";
-  if (/vidhide|streamhide/i.test(n + u)) return "vidhide";
-  if (/savefiles?|streamhls/i.test(n + u)) return "savefiles";
-  if (/hexload/i.test(n + u)) return "hexload";
-  if (/dood|dsvplay/i.test(n + u)) return "dood";
-  if (/filemoon|byse/i.test(n + u)) return "filemoon";
-  if (/streamwish|\bwish\b/i.test(n + u)) return "streamwish";
-  if (/netu|hqq|waaw/i.test(n + u)) return "netu";
-  if (/mega/i.test(n + u)) return "mega";
+  const nu = n + " " + u;
+  if (/mixdrop|mxdrop|mxcontent/i.test(nu)) return "mixdrop";
+  if (/mp4upload/i.test(nu)) return "mp4upload";
+  if (/lulu/i.test(nu)) return "lulu";
+  if (/uqload/i.test(nu)) return "uqload";
+  if (/(^|[^a-z])ok[\s._-]?ru\b|odnoklassniki|okcdn/i.test(nu)) return "okru";
+  if (/obeywish/i.test(nu)) return "obeywish";
+  if (/\bvoe\b|voe\.|voe-unblock|voeunblock/i.test(nu)) return "voe";
+  if (/dood|dsvplay|d-s\.io|ds2play|ds2video|playmogo|myvidplay|vide0\.net|d0+d\.com|dooo+d/i.test(nu)) return "dood";
+  if (/filemoon|byse|moonplayer|f16px/i.test(nu)) return "filemoon";
+  if (/vidhide|streamhide/i.test(nu)) return "vidhide";
+  if (/savefiles?|streamhls/i.test(nu)) return "savefiles";
+  if (/hexload/i.test(nu)) return "hexload";
+  if (/streamwish|\bwish\b|embedwish|hlswish|awish/i.test(nu)) return "streamwish";
+  if (/mega\.nz|\bmega\b/i.test(nu)) return "mega";
+  if (/netu|hqq|waaw/i.test(nu)) return "netu";
   return "generic";
+}
+
+// ---- Salud de cada servidor dentro de Kino ----
+// Si un servidor falla 4 veces seguidas sin ningun exito, pasa al final de la lista durante 6 horas
+// (sigue disponible en el menu Servidor). Un solo exito lo devuelve a su lugar.
+const HEALTH_TTL = 6 * 3600 * 1000;
+function failStreak(kind) {
+  const v = parseInt(cacheGet("hs:" + kind) || "0", 10);
+  return isNaN(v) ? 0 : v;
+}
+function noteResult(kind, ok, e) {
+  try {
+    if (ok) {
+      if (failStreak(kind) > 0) cacheSet("hs:" + kind, "0", HEALTH_TTL);
+      return;
+    }
+    const m = String((e && e.message) || "");
+    if (/borrad|deleted|HTTP 404/i.test(m)) return; // el video de ese capitulo no existe: no es culpa del servidor
+    cacheSet("hs:" + kind, String(failStreak(kind) + 1), HEALTH_TTL);
+  } catch (err) {}
 }
 
 function listServers(html) {
@@ -1288,14 +1328,15 @@ function listServers(html) {
     if (!url || !/^https?:\/\//i.test(url)) continue;
     const name = String(x[2] || "").replace(/\s+/g, " ").trim() || "servidor";
     const kind = detectKind(name, url);
-    if (kind === "mega") continue;
+    if (kind === "mega" || kind === "netu") continue; // Mega va cifrado y Netu pide captcha: no se pueden abrir desde Kino
     const key = kind + "|" + url;
     if (seen[key]) continue;
     seen[key] = true;
     servers.push({ name: name, url: url, kind: kind });
   }
-  const order = { mixdrop: 1, mp4upload: 2, lulu: 3, voe: 4, savefiles: 5, dood: 8, filemoon: 18, streamwish: 19, generic: 15 };
-  servers.sort(function (a, b) { return (order[a.kind] || 15) - (order[b.kind] || 15); });
+  // Orden fijo (los indices de las alternativas diferidas dependen de el); la salud y la preferencia solo
+  // cambian el orden de prueba en resolve().
+  servers.sort(function (a, b) { return (KIND_ORDER[a.kind] || 15) - (KIND_ORDER[b.kind] || 15); });
   return servers;
 }
 
@@ -1308,88 +1349,193 @@ function serverLabel(s, all) {
   return count <= 1 ? base : base + " " + idx;
 }
 
-function jsUnpack(source) {
-  try {
-    const m =
-      /}\s*\(\s*'((?:\\'|[^'])*)'\s*,\s*(\d+)\s*,\s*(\d+)\s*,\s*'((?:\\'|[^'])*)'\s*\.split\s*\(\s*'\|'\s*\)/.exec(source) ||
-      /\}\('((?:\\'|[^'])*)',(\d+),(\d+),'((?:\\'|[^'])*)'\.split\('\|'\)/.exec(source);
-    if (!m) return "";
-    const payload = m[1].replace(/\\'/g, "'").replace(/\\\\/g, "\\");
-    const radix = parseInt(m[2], 10);
-    const count = parseInt(m[3], 10);
-    const words = m[4].split("|");
-    const trie = {};
-    for (let i = 0; i < count; i++) trie[i.toString(radix)] = words[i] || i.toString(radix);
-    return payload.replace(/\b\w+\b/g, function (w) {
-      return Object.prototype.hasOwnProperty.call(trie, w) ? trie[w] : w;
-    });
-  } catch (e) {
-    return "";
+// ---- Desempaquetador p.a.c.k.e.r ----
+// Dean Edwards usa base 62 (0-9, a-z, A-Z); Number.toString solo llega a 36, asi que la conversion es propia.
+function packEnc(c, a) {
+  return (c < a ? "" : packEnc(Math.floor(c / a), a)) + ((c = c % a) > 35 ? String.fromCharCode(c + 29) : c.toString(36));
+}
+function unpackOne(payload, radix, count, wordsRaw) {
+  const words = wordsRaw.split("|");
+  const trie = {};
+  for (let i = 0; i < count; i++) {
+    const key = packEnc(i, radix);
+    trie[key] = words[i] || key;
   }
+  return payload.replace(/\b\w+\b/g, function (w) {
+    return Object.prototype.hasOwnProperty.call(trie, w) ? trie[w] : w;
+  });
+}
+function jsUnpack(source) {
+  const src = String(source || "");
+  const res = [
+    /\}\s*\(\s*'((?:\\'|[^'])*)'\s*,\s*(\d+)\s*,\s*(\d+)\s*,\s*'((?:\\'|[^'])*)'\s*\.split\s*\(\s*'\|'\s*\)/g,
+    /\}\s*\(\s*"((?:\\"|[^"])*)"\s*,\s*(\d+)\s*,\s*(\d+)\s*,\s*"((?:\\"|[^"])*)"\s*\.split\s*\(\s*"\|"\s*\)/g,
+  ];
+  let out = "";
+  for (let r = 0; r < res.length; r++) {
+    const q = r === 0 ? "'" : '"';
+    let m;
+    while ((m = res[r].exec(src))) {
+      try {
+        const payload = m[1].split("\\" + q).join(q).replace(/\\\\/g, "\\");
+        const words = m[4].split("\\" + q).join(q);
+        out += "\n" + unpackOne(payload, parseInt(m[2], 10), parseInt(m[3], 10), words);
+      } catch (e) {}
+    }
+  }
+  return out;
 }
 function unpackAll(html) {
-  const src = String(html || "");
-  const u = jsUnpack(src);
-  if (u) return u;
-  return "";
+  const first = jsUnpack(html);
+  if (!first) return "";
+  const second = jsUnpack(first); // empaquetado dentro de empaquetado
+  return first + (second ? "\n" + second : "");
 }
 
-function findStreamUrl(html) {
-  const src = String(html || "");
+function findStreamUrl(html, base) {
+  const src = String(html || "")
+    .replace(/\\\//g, "/")
+    .replace(/\\u0026/gi, "&")
+    .replace(/&amp;/g, "&");
+  const root = base || BASE;
+  function fix(u) {
+    u = unslash(String(u || "")).replace(/\\/g, "").trim();
+    if (u.indexOf("//") === 0) return "https:" + u;
+    if (u.charAt(0) === "/") return originOf(root) + u;
+    return u;
+  }
   let m = /MDCore\.wurl\s*=\s*["']([^"']+)["']/i.exec(src);
-  if (m && /\.(mp4|m3u8)/i.test(m[1])) return unslash(m[1]);
+  if (m && /\.(mp4|m3u8)/i.test(m[1])) return fix(m[1]);
   m = /\bwurl\s*=\s*["']([^"']+)["']/i.exec(src);
-  if (m && /\.(mp4|m3u8)/i.test(m[1])) return unslash(m[1]);
+  if (m && /\.(mp4|m3u8)/i.test(m[1])) return fix(m[1]);
+  // StreamWish / ObeyWish / Lulu: var links={"hls4":"...","hls3":"...","hls2":"..."}
+  const hre = /["']hls[234]["']\s*:\s*["']([^"']+)["']/gi;
+  let h;
+  const hls = [];
+  while ((h = hre.exec(src))) hls.push(fix(h[1]));
+  for (let i = 0; i < hls.length; i++) if (/^https?:\/\//i.test(hls[i]) && /\.m3u8|\/hls\//i.test(hls[i])) return hls[i];
+  if (hls.length && /^https?:\/\//i.test(hls[0])) return hls[0];
   const patterns = [
+    /(?:file|src|source|video_url)["']?\s*[:=]\s*["']((?:https?:)?\/\/[^"'\s<>]+\.(?:m3u8|mp4)[^"'\s<>]*)["']/i,
+    /(?:file|src|source)["']?\s*[:=]\s*["'](\/[^"'\s<>]+\.m3u8[^"'\s<>]*)["']/i,
     /https?:\/\/[^"'\s<>]+\.m3u8[^"'\s<>]*/i,
     /https?:\/\/[^"'\s<>]+\.mp4[^"'\s<>]*/i,
-    /\/\/[a-z0-9.-]+(?::\d+)?\/[^"'\s<>]+\.m3u8[^"'\s<>]*/i,
-    /\/\/[a-z0-9.-]+(?::\d+)?\/[^"'\s<>]+\.mp4[^"'\s<>]*/i,
     /["']((?:https?:)?\/\/[^"']+\.m3u8[^"']*)["']/i,
     /["']((?:https?:)?\/\/[^"']+\.mp4[^"']*)["']/i,
-    /file\s*:\s*["']((?:https?:)?\/\/[^"']+)["']/i,
-    /src\s*:\s*["']((?:https?:)?\/\/[^"']+\.(?:m3u8|mp4)[^"']*)["']/i,
   ];
   for (let i = 0; i < patterns.length; i++) {
-    const mm = patterns[i].exec(src);
-    if (mm) return unslash(mm[1] || mm[0]);
+    const re = new RegExp(patterns[i].source, "gi");
+    let mm;
+    while ((mm = re.exec(src))) {
+      const cand = fix(mm[1] || mm[0]);
+      if (/doubleclick|googlesyndication|adserver|\/ads?\//i.test(cand)) continue;
+      return cand;
+    }
   }
-  // mp4upload style: a3.mp4upload.com:183/d/.../video.mp4
+  // mp4upload: https://a4.mp4upload.com:183/d/<token>/video.mp4
   m = /https?:\/\/[a-z0-9.-]+(?::\d+)?\/d\/[^"'\s<>]+\/video\.mp4/i.exec(src);
   if (m) return m[0];
   return "";
 }
 
-function streamResult(url, referer, label) {
-  return {
-    url: url,
-    headers: { Referer: referer || BASE + "/", "User-Agent": UA },
-    alts: [],
-    label: label || "",
-  };
-}
-function goneIn(html) {
-  return /File Not Found|deleted|not found|removed|no (longer|existe)|expirad|File was deleted/i.test(String(html || ""));
+function streamResult(url, referer, label, extra, q) {
+  const headers = Object.assign({ Referer: referer || BASE + "/", "User-Agent": UA }, extra || {});
+  return { url: url, headers: headers, alts: [], label: label || "", q: q || 0 };
 }
 
+// ---- Calidad ----
+// La altura del video sale, en este orden, de: la lista de calidades del servidor (Ok.ru), pistas en la URL o en el
+// reproductor ("1080p"), y RESOLUTION= del manifiesto HLS (solo si Kino deja leerlo: kino.fetchAnyHost).
+function heightFromText(s) {
+  s = String(s || "");
+  let best = 0, m;
+  const re = /RESOLUTION=\d+x(\d+)/gi;
+  while ((m = re.exec(s))) best = Math.max(best, parseInt(m[1], 10));
+  if (best) return best;
+  m = /(?:^|[^\d])(2160|1440|1080|720|576|480|360|240)\s*p(?![a-z])/i.exec(s);
+  return m ? parseInt(m[1], 10) : 0;
+}
+function heightFromUrl(u) {
+  const m = /[_\/.=-](2160|1440|1080|720|480|360|240)(?:p)?(?=[_\/.&?=-]|$)/.exec(String(u || ""));
+  return m ? parseInt(m[1], 10) : heightFromText(u);
+}
+function playerHint(html) {
+  const m = /(?:label|quality|res)["']?\s*[:=]\s*["']?(2160|1440|1080|720|480|360|240)p?["']?/i.exec(String(html || ""));
+  return m ? parseInt(m[1], 10) : 0;
+}
+async function probeHls(url, headers) {
+  if (kino.fetchAnyHost !== true || !/\.m3u8/i.test(String(url))) return 0;
+  try {
+    const r = await kino.fetch(url, { headers: headers || {}, timeoutMs: 4000 });
+    return r && r.ok ? heightFromText(bodyText(r)) : 0;
+  } catch (e) {
+    return 0;
+  }
+}
+function estQ(kind) {
+  const v = parseInt(cacheGet("q:" + kind) || "0", 10);
+  return isNaN(v) ? 0 : v;
+}
+function withQ(label, q) {
+  return q ? label + " · " + q + "p" : label;
+}
+function goneIn(html) {
+  return /File Not Found|deleted|not found|removed|no (longer|existe)|expirad|File was deleted|Video not found/i.test(String(html || ""));
+}
+
+// ---- Tiempo disponible y navegador oculto ----
+let RESOLVE_T0 = 0;
+let CAP_OFF = false; // se apaga si Kino dice que el navegador oculto no esta permitido o no existe en este equipo
+function canCapture() {
+  return !CAP_OFF && typeof kino.browser === "object" && kino.browser !== null && typeof kino.browser.capture === "function";
+}
+function left() {
+  // Con navegador oculto aprobado, resolve tiene 75 s; sin el, unos 20 s.
+  return (canCapture() ? 68000 : 18500) - (Date.now() - RESOLVE_T0);
+}
+
+async function captureStream(embed, label) {
+  if (!canCapture()) throw fail("unavailable", label + " sin navegador oculto", "serverFailed");
+  const ms = Math.max(6000, Math.min(20000, left() - 2000));
+  let page;
+  try {
+    page = await kino.browser.capture(embed, { timeoutMs: ms, headers: { Referer: BASE + "/" } });
+  } catch (e) {
+    const code = String((e && e.code) || "");
+    if (code === "not_allowed" || code === "browser_unavailable") CAP_OFF = true;
+    throw fail("unavailable", label + " captura " + (code || (e && e.message) || "fallo"), "serverFailed");
+  }
+  const list = ((page && page.media) || []).filter(function (x) { return x && x.url; });
+  const good = list.filter(function (x) { return !/doubleclick|googlesyndication|adserver|\/ads?\//i.test(x.url); });
+  const pick = good[0] || list[0];
+  if (!pick) throw fail("unavailable", label + " captura sin video", "serverFailed");
+  kino.log(label + " captura OK " + String(pick.url).slice(0, 70));
+  const origin = originOf((page && page.finalUrl) || embed);
+  return {
+    url: pick.url,
+    headers: pick.headers && Object.keys(pick.headers).length ? pick.headers : { Referer: origin + "/", "User-Agent": UA },
+    alts: [],
+    label: label,
+    q: heightFromUrl(pick.url),
+  };
+}
+
+// ---- Via 1: kino.fetch + HTML ----
 async function packerStream(embed, label) {
-  const page = await getPage(embed, { Referer: BASE + "/" }, 14000);
+  const page = await getPage(embed, { Referer: BASE + "/" }, 10000);
   const html = page.html;
-  kino.log(label + " len=" + html.length + " host=" + originOf(page.url));
+  const origin = originOf(page.url);
+  kino.log(label + " len=" + html.length + " host=" + origin);
   if (html.length < 500 && /just a moment|cf-browser|challenge/i.test(html)) {
     throw fail("unavailable", label + " bloqueado CF", "serverFailed");
   }
-  if (/filemoon|byse/i.test(label) && /type=["']module["']/.test(html) && !/\.m3u8/i.test(html) && !/MDCore/i.test(html)) {
-    throw fail("unavailable", "Filemoon protegido (SPA)", "serverFailed");
-  }
   const unpacked = unpackAll(html);
-  let file = findStreamUrl(unpacked) || findStreamUrl(html);
+  let file = findStreamUrl(unpacked, page.url) || findStreamUrl(html, page.url);
   if (!file) throw fail("unavailable", goneIn(html) ? label + " borrado" : label + " sin video", "serverFailed");
-  file = String(file).replace(/\\/g, "");
   if (file.indexOf("//") === 0) file = "https:" + file;
   if (!/^https?:\/\//i.test(file)) throw fail("unavailable", label + " URL invalida", "serverFailed");
   kino.log(label + " OK " + file.slice(0, 60));
-  return streamResult(file, originOf(page.url) + "/", label);
+  return streamResult(file, origin + "/", label, null, heightFromUrl(file) || playerHint(unpacked) || playerHint(html));
 }
 
 function randomAlpha(n) {
@@ -1399,35 +1545,121 @@ function randomAlpha(n) {
   return s;
 }
 async function doodStream(embed) {
-  const page = await getPage(embed, { Referer: BASE + "/" });
+  const url = String(embed).replace(/\/(?:d|download)\//, "/e/");
+  const page = await getPage(url, { Referer: BASE + "/" }, 10000);
+  const origin = originOf(page.url);
   const m = /\/pass_md5\/([^"'\s]+)/.exec(page.html);
   if (!m) throw fail("unavailable", goneIn(page.html) ? "Dood borrado" : "Dood sin video", "serverFailed");
-  const pass = await getPage(originOf(page.url) + "/pass_md5/" + m[1], { Referer: page.url });
+  const pass = await getPage(origin + "/pass_md5/" + m[1], { Referer: page.url }, 10000);
   const tok = String(pass.html || "").trim();
-  if (!tok || tok.length > 500) throw fail("unavailable", "Dood sin token", "serverFailed");
+  if (!tok || tok.length > 500 || /<html|<!doctype/i.test(tok)) throw fail("unavailable", "Dood sin token", "serverFailed");
   const parts = m[1].split("/");
-  const file = tok + randomAlpha(10) + "?token=" + (parts[parts.length - 1] || "") + "&expiry=" + Date.now();
-  const full = file.indexOf("http") === 0 ? file : originOf(page.url) + file;
-  return streamResult(full, originOf(page.url) + "/", "Doodstream");
+  const tm = /makePlay[\s\S]{0,300}?token=([A-Za-z0-9]+)/.exec(page.html);
+  const token = (tm && tm[1]) || parts[parts.length - 1] || "";
+  const file = tok + randomAlpha(10) + "?token=" + token + "&expiry=" + Date.now();
+  const full = file.indexOf("http") === 0 ? file : origin + file;
+  return streamResult(full, origin + "/", "Doodstream");
 }
 
-async function streamFor(s) {
+// Ok.ru: la pagina /videoembed/<id> trae un data-options (JSON escapado) con el manifiesto HLS o la lista de calidades.
+async function okruStream(embed) {
+  const id = (/ok\.ru\/(?:videoembed|video)\/(\d+)/i.exec(embed) || /odnoklassniki\.ru\/(?:videoembed|video)\/(\d+)/i.exec(embed) || [])[1];
+  if (!id) throw fail("unavailable", "Ok.ru sin id", "serverFailed");
+  const page = await getPage("https://ok.ru/videoembed/" + id, { Referer: BASE + "/", "User-Agent": DESKTOP_UA }, 10000);
+  const m = /data-options=(?:"([^"]+)"|'([^']+)')/.exec(page.html);
+  if (!m) throw fail("unavailable", goneIn(page.html) ? "Ok.ru borrado" : "Ok.ru sin video", "serverFailed");
+  let meta = null;
+  try {
+    const opts = JSON.parse(decodeHtml(m[1] || m[2]));
+    const raw = opts && opts.flashvars && opts.flashvars.metadata;
+    meta = typeof raw === "string" ? JSON.parse(raw) : raw;
+  } catch (e) {
+    meta = null;
+  }
+  if (!meta) throw fail("unavailable", "Ok.ru sin metadata", "serverFailed");
+  const hls = meta.hlsManifestUrl || meta.ondemandHls || meta.hlsMasterPlaylistUrl;
+  if (hls && /^https?:\/\//i.test(hls)) return streamResult(hls, "https://ok.ru/", "Ok.ru");
+  const rank = { mobile: 1, lowest: 2, low: 3, sd: 4, hd: 5, full: 6, quad: 7, ultra: 8 };
+  const height = { mobile: 144, lowest: 240, low: 360, sd: 480, hd: 720, full: 1080, quad: 1440, ultra: 2160 };
+  const vids = (meta.videos || []).filter(function (v) { return v && /^https?:\/\//i.test(v.url || ""); });
+  vids.sort(function (a, b) { return (rank[b.name] || 0) - (rank[a.name] || 0); });
+  if (!vids.length) throw fail("unavailable", goneIn(page.html) || meta.error ? "Ok.ru borrado" : "Ok.ru sin video", "serverFailed");
+  return streamResult(vids[0].url, "https://ok.ru/", "Ok.ru", null, height[vids[0].name] || 0);
+}
+
+// Convierte enlaces de "pagina de descarga" o de ficha en el enlace de reproductor incrustado.
+function embedUrl(s) {
+  let u = String(s.url || "");
   switch (s.kind) {
-    case "dood": return doodStream(s.url);
-    case "mixdrop": return packerStream(String(s.url).replace("/f/", "/e/"), "MixDrop");
-    case "mp4upload": return packerStream(s.url, "Mp4Upload");
-    case "voe": return packerStream(s.url, "Voe");
+    case "mixdrop":
+      return u.replace(/\/(?:f|file)\//, "/e/");
+    case "mp4upload": {
+      const m = /^(https?:\/\/(?:www\d?\.)?mp4upload\.com)\/(?!embed-)([a-z0-9]{8,16})\/?$/i.exec(u);
+      return m ? m[1] + "/embed-" + m[2] + ".html" : u;
+    }
+    case "uqload": {
+      const m = /^(https?:\/\/[^/]+)\/(?!embed-)([a-z0-9]{8,16})(?:\.html)?$/i.exec(u);
+      return m ? m[1] + "/embed-" + m[2] + ".html" : u;
+    }
     case "lulu":
-    case "vidhide":
-    case "savefiles":
-    case "hexload":
-    case "filemoon":
+    case "obeywish":
     case "streamwish":
-    case "uqload":
-    case "netu":
-      return packerStream(s.url, KIND_LABEL[s.kind] || s.name);
+    case "vidhide":
+    case "filemoon":
+      return u.replace(/^(https?:\/\/[^/]+)\/(?:f|d|v|download)\//, "$1/e/");
     default:
-      return packerStream(s.url, "Servidor");
+      return u;
+  }
+}
+
+async function fetchPath(s, url) {
+  switch (s.kind) {
+    case "dood": return doodStream(url);
+    case "okru": return okruStream(url);
+    default: return packerStream(url, KIND_LABEL[s.kind] || s.name || "Servidor");
+  }
+}
+
+async function rawStream(s, noCap) {
+  const url = embedUrl(s);
+  const label = KIND_LABEL[s.kind] || s.name || "Servidor";
+  // Voe y Filemoon/Byse arman el video con JavaScript (y Voe cambia de dominio): navegador oculto primero.
+  if (!noCap && (s.kind === "voe" || s.kind === "filemoon") && canCapture()) {
+    try {
+      return await captureStream(url, label);
+    } catch (e) {
+      kino.log("capture " + s.kind + ": " + ((e && e.message) || e));
+      if (left() < 9000) throw e;
+      return fetchPath(s, url); // ultimo intento por la via normal
+    }
+  }
+  let first = null;
+  try {
+    return await fetchPath(s, url);
+  } catch (e) {
+    first = e;
+  }
+  // Respaldo: si la via normal fallo y queda tiempo, intentar con el navegador oculto (si no es un video borrado).
+  if (!noCap && canCapture() && left() > 14000 && !/borrad/i.test(String((first && first.message) || ""))) {
+    try {
+      return await captureStream(url, label);
+    } catch (e2) {
+      kino.log("capture respaldo " + s.kind + ": " + ((e2 && e2.message) || e2));
+    }
+  }
+  throw first;
+}
+
+async function streamFor(s, noCap) {
+  try {
+    const st = await rawStream(s, noCap);
+    if (!st.q) st.q = await probeHls(st.url, st.headers);
+    if (st.q) cacheSet("q:" + s.kind, String(st.q), 24 * 3600 * 1000);
+    noteResult(s.kind, true);
+    return st;
+  } catch (e) {
+    noteResult(s.kind, false, e);
+    throw e;
   }
 }
 
@@ -1442,29 +1674,18 @@ function parseResolveRef(ref) {
 }
 
 export async function resolve(ref) {
-  const T = Date.now();
-  function left() { return 18500 - (Date.now() - T); }
+  RESOLVE_T0 = Date.now();
+  CAP_OFF = false;
   const p = parseResolveRef(ref);
   if (!p) throw fail("not_found", "ref " + ref, "badRef");
 
   const page = await getPage(BASE + "/ver/" + p.slug + "-episodio-" + p.num, null, 14000);
-  let servers = listServers(page.html);
-
-  try {
-    const pref = (kino.config && (kino.config.server || (kino.config.get && kino.config.get("server")))) || "";
-    if (pref) {
-      servers = servers.slice().sort(function (a, b) {
-        if (a.kind === pref && b.kind !== pref) return -1;
-        if (b.kind === pref && a.kind !== pref) return 1;
-        return 0;
-      });
-    }
-  } catch (e) {}
+  const servers = listServers(page.html);
 
   kino.log(
     "resolve " + p.slug + "-" + p.num +
       (p.idx >= 0 ? " server#" + p.idx : "") +
-      ": " + servers.map(function (s) { return s.name; }).join(", ")
+      ": " + servers.map(function (s) { return s.name + "(" + s.kind + ")"; }).join(", ")
   );
   if (!servers.length) throw fail("not_found", "sin servidores", "noServers");
 
@@ -1472,73 +1693,99 @@ export async function resolve(ref) {
   if (p.idx >= 0) {
     const s = servers[p.idx];
     if (!s) throw fail("not_found", "servidor " + p.idx + " no existe", "noServers");
-    const stream = await streamFor(s);
+    const stream = await streamFor(s, false);
     return {
       url: stream.url,
       headers: stream.headers || { Referer: originOf(s.url) + "/", "User-Agent": UA },
-      label: serverLabel(s, servers),
+      label: withQ(serverLabel(s, servers), stream.q),
       expiresInSeconds: 1800,
     };
   }
 
-  // Primera resolucion: abrir el preferido; el resto quedan como alternativas diferidas.
-  // Si el principal falla, Kino prueba las alternatives automaticamente.
-  let main = null;
-  let used = null;
+  let pref = "";
+  try {
+    pref = String((kino.config && (kino.config.server || (kino.config.get && kino.config.get("server")))) || "");
+  } catch (e) {}
+
+  const viaCapture = function (s) { return (s.kind === "voe" || s.kind === "filemoon") && canCapture(); };
+  const idxs = servers.map(function (_s, i) { return i; });
+  const results = []; // { i, st }
+  const failed = {};
   const failures = [];
-  const rest = [];
 
-  for (let i = 0; i < servers.length; i++) {
-    const s = servers[i];
-    if (main) {
-      rest.push({ s: s, idx: i });
-      continue;
-    }
-    if (left() < 3000) {
-      rest.push({ s: s, idx: i });
-      continue;
-    }
+  // Fase A: los servidores que abren con kino.fetch se prueban en paralelo, para conocer su calidad.
+  const fast = idxs.filter(function (i) { return !viaCapture(servers[i]); });
+  const phaseA = mapLimit(fast, 4, async function (i) {
     try {
-      main = await streamFor(s);
-      used = { s: s, idx: i };
+      results.push({ i: i, st: await streamFor(servers[i], true) });
     } catch (e) {
-      failures.push(serverLabel(s, servers) + ": " + reasonOf(e));
-      kino.log("resolve " + s.kind + ": " + ((e && e.message) || e));
-      // Si falla, el siguiente del bucle se intentara en caliente
+      failed[i] = true;
+      failures.push(serverLabel(servers[i], servers) + ": " + reasonOf(e));
+      kino.log("resolve " + servers[i].kind + ": " + ((e && e.message) || e));
+    }
+  });
+  await within(phaseA, Math.max(3000, Math.min(14000, left() - 4000)));
+
+  // Fase B: si ninguno abrio, navegador oculto (Voe, Filemoon y respaldo de los que fallaron), uno por uno.
+  if (!results.length) {
+    const order = idxs.slice().sort(function (a, b) {
+      return (viaCapture(servers[a]) ? 0 : 1) - (viaCapture(servers[b]) ? 0 : 1) || a - b;
+    });
+    for (let n = 0; n < order.length && !results.length; n++) {
+      const i = order[n];
+      if (left() < 4000 || !canCapture()) break;
+      const s = servers[i];
+      if (!viaCapture(s) && !failed[i]) continue;
+      try {
+        results.push({ i: i, st: await streamFor(s, false) });
+      } catch (e) {
+        failed[i] = true;
+        failures.push(serverLabel(s, servers) + ": " + reasonOf(e));
+        kino.log("resolve captura " + s.kind + ": " + ((e && e.message) || e));
+      }
     }
   }
 
-  if (!main) {
-    throw fail(
-      "unavailable",
-      "ningun servidor (" + failures.slice(0, 4).join("; ") + ")",
-      "serverFailed"
-    );
+  if (!results.length) {
+    throw fail("unavailable", "ningun servidor (" + failures.slice(0, 5).join("; ") + ")", "serverFailed");
   }
 
+  // Orden: mas calidad primero (la medida; si no, la ultima vista de ese servidor); a igual calidad, el preferido
+  // y luego el orden fijo de la lista.
+  function qOf(r) { return r.st.q || estQ(servers[r.i].kind); }
+  results.sort(function (a, b) {
+    return qOf(b) - qOf(a) ||
+      (servers[b.i].kind === pref ? 1 : 0) - (servers[a.i].kind === pref ? 1 : 0) ||
+      a.i - b.i;
+  });
+
+  const best = results[0];
   const stream = {
-    url: main.url,
-    headers: main.headers || { Referer: originOf(used.s.url) + "/", "User-Agent": UA },
-    label: serverLabel(used.s, servers),
+    url: best.st.url,
+    headers: best.st.headers || { Referer: originOf(servers[best.i].url) + "/", "User-Agent": UA },
+    label: withQ(serverLabel(servers[best.i], servers), best.st.q),
     expiresInSeconds: 1800,
   };
 
-  // Alternativas diferidas: Kino las resuelve solo si el principal falla o el usuario cambia de servidor
-  const alternatives = [];
-  for (let i = 0; i < rest.length && alternatives.length < 8; i++) {
-    const r = rest[i];
-    alternatives.push({
-      label: serverLabel(r.s, servers),
-      ref: "s:" + r.idx + ":e:" + p.slug + ":" + p.num,
-    });
-  }
-  // Si el preferido fallo y abrimos el 2º, aun asi listar los que no se probaron
-  // Tambien anadir los que fallaron? No: solo los no intentados, para no repetir errores.
+  // Alternativas: los demas que abrieron y los de navegador oculto sin probar (con la calidad que tuvieron la ultima vez).
+  const done = {};
+  results.forEach(function (r) { done[r.i] = r; });
+  const pool = [];
+  results.slice(1).forEach(function (r) { pool.push({ i: r.i, q: r.st.q || estQ(servers[r.i].kind), known: !!r.st.q }); });
+  idxs.forEach(function (i) {
+    if (done[i] || failed[i]) return;
+    pool.push({ i: i, q: estQ(servers[i].kind), known: false });
+  });
+  pool.sort(function (a, b) {
+    return b.q - a.q ||
+      (servers[b.i].kind === pref ? 1 : 0) - (servers[a.i].kind === pref ? 1 : 0) ||
+      a.i - b.i;
+  });
+  const alternatives = pool.slice(0, 8).map(function (x) {
+    return { label: withQ(serverLabel(servers[x.i], servers), x.q), ref: "s:" + x.i + ":e:" + p.slug + ":" + p.num };
+  });
   if (alternatives.length) stream.alternatives = alternatives;
 
-  kino.log(
-    "resolve OK " + stream.label +
-      " + " + alternatives.length + " alternativas"
-  );
+  kino.log("resolve OK " + stream.label + " + " + alternatives.length + " alternativas");
   return stream;
 }
