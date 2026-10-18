@@ -4,7 +4,7 @@
   "version": "3.10.0",
   "apiVersion": 6,
   "entry": "plugin.js",
-  "description": "Anime subtitulado de monoschinos.st. En emisión (últimos capítulos), animes y películas, con carátulas y fondos de TMDB (principal) y AniList (respaldo inmediato) e imágenes de capítulos de TMDB. Servidores: MixDrop, Mp4Upload, LuluStream, Uqload, Ok.ru, ObeyWish, Doodstream, Voe y Filemoon (Voe y Filemoon con navegador oculto).",
+  "description": "Anime subtitulado de monoschinos.st: En emisión, animes y películas, con carátulas de TMDB y AniList. Servidores: MixDrop, Mp4Upload, LuluStream, Uqload, Ok.ru, ObeyWish, Doodstream, Voe y Filemoon.",
   "author": "tu-usuario-de-github",
   "hosts": [
     "graphql.anilist.co",
@@ -125,7 +125,7 @@
       "label": "Servidor preferido",
       "type": "select",
       "default": "mixdrop",
-      "hint": "Se intenta primero; el resto queda en el menu Servidor. Voe y Filemoon usan el navegador oculto.",
+      "hint": "Se intenta primero; el resto queda en el menu Servidor.",
       "options": [
         {
           "value": "mixdrop",
