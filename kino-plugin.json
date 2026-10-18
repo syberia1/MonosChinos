@@ -1,11 +1,12 @@
 {
   "id": "monoschinos",
   "name": "MonosChinos",
-  "version": "3.10.4",
+  "version": "4.0.0",
   "apiVersion": 6,
   "entry": "plugin.js",
+  "icon": "icon.png",
   "description": "Anime subtitulado de monoschinos.st: En emisión, animes y películas, con carátulas de TMDB y AniList. Servidores: MixDrop, Mp4Upload, LuluStream, Uqload, Ok.ru, ObeyWish, Doodstream, Voe, Filemoon, SaveFiles y Hexload.",
-  "author": "tu-usuario-de-github",
+  "author": "Syberia",
   "hosts": [
     "graphql.anilist.co",
     "monoschinos.st",
