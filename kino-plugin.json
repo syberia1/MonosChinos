@@ -4,7 +4,7 @@
   "version": "4.0.0",
   "apiVersion": 6,
   "entry": "plugin.js",
-  "icon": "Icon.jpg",
+  "icon": "icon.png",
   "description": "Anime subtitulado de monoschinos.st: En emisión, animes y películas, con carátulas de TMDB y AniList. Servidores: MixDrop, Mp4Upload, LuluStream, Uqload, Ok.ru, ObeyWish, Doodstream, Voe, Filemoon, SaveFiles y Hexload.",
   "author": "Syberia",
   "hosts": [
