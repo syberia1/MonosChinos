@@ -1,7 +1,7 @@
 {
   "id": "monoschinos",
   "name": "MonosChinos",
-  "version": "3.6.0",
+  "version": "3.6.2",
   "apiVersion": 6,
   "entry": "plugin.js",
   "description": "Anime subtitulado de monoschinos.st. En emisión (últimos capítulos), animes y películas, con carátulas y fondos de TMDB (respaldo AniList) e imágenes de capítulos de TMDB.",

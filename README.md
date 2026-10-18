@@ -13,6 +13,14 @@ Plugin de Kino (apiVersion 6) para [MonosChinos](https://monoschinos.st): busca 
 | **Película** | Un solo botón de reproducir (capítulo 1 del sitio). |
 | **Reproducir / Descargar** | Voe, MixDrop, Mp4Upload, LuluStream, SaveFiles, Doodstream, Filemoon y otros; el que no elijas queda en el menú Servidor. |
 
+## Qué cambió en la 3.6.2
+
+- **Imagen de las tarjetas (`cardsFrom()`).** Se lee `data-src`, `data-lazy` o `data-bg`; si no hay ninguno, o es un marcador (`anime.png`, `blank`, `placeholder`), se toma el `src` de la primera `<img>` de la tarjeta. Antes solo se aceptaban `src` que contuvieran `assets`.
+
+## Qué cambió en la 3.6.1
+
+- **`cleanImg()` con tu versión.** Las rutas `/assets/thumbs/imagen/…` y `/assets/thumbs/portada/…` se convierten a `/assets/img/serie/imagen/…jpg` y `/assets/img/serie/portada/…jpg`. Para cualquier otra ruta solo se quita el doble sufijo `.jpg.webp`; un `.webp` suelto ya no se cambia a `.jpg` (esa conversión podía apuntar a un archivo que no existe).
+
 ## Qué cambió en la 3.6.0
 
 - **AniList de respaldo para carátulas y fondos.** Una sola petición trae hasta 8 títulos (hasta 24 por apertura del inicio) con su carátula, su banner (que sirve de fondo en las tarjetas de la tele) y su resumen. Se aplican primero; en cuanto TMDB tiene datos del título, esos mandan. Se valida por año (±1) o, en temporadas marcadas ("S3", "Temporada 2"), por el parecido del nombre. Así la primera apertura ya muestra imágenes aunque TMDB tarde o no tenga el título.

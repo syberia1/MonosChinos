@@ -109,22 +109,21 @@ function cleanImg(u) {
   u = abs(u);
   if (!u || /anime\.png|capblank|placeholder/i.test(u)) return "";
   u = u.replace(/[?#].*$/, "");
-  // /assets/thumbs/imagen/NAME.jpg.webp  OR  NAME.webp  OR  NAME.jpg
+
+  // /assets/thumbs/imagen/NAME.jpg.webp  OR  NAME.webp  OR  NAME.jpg  ->  /assets/img/serie/imagen/NAME.jpg
   let m = /\/assets\/thumbs\/imagen\/([^/]+)$/i.exec(u);
   if (m) {
-    let name = m[1].replace(/\.(webp|jpg|jpeg|png)$/i, "");
-    name = name.replace(/\.(webp|jpg|jpeg|png)$/i, "");
+    let name = m[1].replace(/\.(webp|jpg|jpeg|png)$/i, "").replace(/\.(webp|jpg|jpeg|png)$/i, "");
     return BASE + "/assets/img/serie/imagen/" + name + ".jpg";
   }
   m = /\/assets\/thumbs\/portada\/([^/]+)$/i.exec(u);
   if (m) {
-    let name = m[1].replace(/\.(webp|jpg|jpeg|png)$/i, "");
-    name = name.replace(/\.(webp|jpg|jpeg|png)$/i, "");
+    let name = m[1].replace(/\.(webp|jpg|jpeg|png)$/i, "").replace(/\.(webp|jpg|jpeg|png)$/i, "");
     return BASE + "/assets/img/serie/portada/" + name + ".jpg";
   }
-  // Ya es /assets/img/serie/... : quitar .webp si viniera
-  u = u.replace(/\.jpg\.webp$/i, ".jpg").replace(/\.webp$/i, ".jpg");
-  return u;
+
+  // Cualquier otra ruta: solo se quita el doble sufijo ".jpg.webp"; un ".webp" suelto se respeta tal cual.
+  return u.replace(/\.jpg\.webp$/i, ".jpg");
 }
 
 async function getPage(url, headers, timeoutMs) {
@@ -615,10 +614,12 @@ function cardsFrom(html, opts) {
     title = title.replace(/\s*\.\.\.\s*$/, "").trim();
 
     let src = "";
-    const ds = /data-src=["']([^"']+)["']/i.exec(box);
+
+    const ds = /(?:data-src|data-lazy|data-bg)=["']([^"']+)["']/i.exec(box);
     if (ds) src = ds[1];
-    if (!src || /anime\.png/i.test(src)) {
-      const ss = /src=["']([^"']*assets[^"']+)["']/i.exec(box);
+
+    if (!src || /anime\.png|blank|placeholder/i.test(src)) {
+      const ss = /<img[^>]+src=["']([^"']+)["']/i.exec(box);
       if (ss) src = ss[1];
     }
     let poster = cleanImg(src);
