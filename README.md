@@ -13,6 +13,14 @@ Plugin de Kino (apiVersion 6) para [MonosChinos](https://monoschinos.st): busca 
 | **Película** | Un solo botón de reproducir (capítulo 1 del sitio). |
 | **Reproducir / Descargar** | Voe, MixDrop, Mp4Upload, LuluStream, SaveFiles, Doodstream, Filemoon y otros; el que no elijas queda en el menú Servidor. |
 
+## Qué cambió en la 3.8.0
+
+- **AniList es la fuente principal y TMDB la secundaria** para carátulas y fondos de las listas. Si AniList tiene el título, sus imágenes mandan; TMDB solo rellena lo que AniList no trajo (una carátula que falta o un fondo/banner que falta).
+- **Dos fases en orden:** primero AniList para todos los títulos que falten (hasta 96, 8 por petición, 4 peticiones a la vez); después TMDB, empezando por los títulos que siguen **sin ninguna imagen** (los que se veían en negro) y luego por los que solo les falta el fondo. Hasta 18 búsquedas de TMDB por apertura (su límite es de unas 20 cada 10 s).
+- **Carátulas más livianas.** Se usa la versión `large` de AniList (unas 3 o 4 veces más liviana que `extraLarge`), así cargan antes en la lista.
+- **AniList acepta el título aunque el año no coincida** si el nombre es muy parecido (80 % de las palabras).
+- Las **imágenes de los capítulos** siguen saliendo de TMDB.
+
 ## Qué cambió en la 3.7.0
 
 - **Se revirtieron los dos cambios de código de las versiones 3.6.1 y 3.6.2:** `cleanImg()` y la lectura de la imagen en `cardsFrom()` vuelven a como estaban en la 3.6.0.
@@ -33,7 +41,7 @@ Plugin de Kino (apiVersion 6) para [MonosChinos](https://monoschinos.st): busca 
 
 ## Qué cambió en la 3.6.0
 
-- **AniList de respaldo para carátulas y fondos.** Una sola petición trae hasta 8 títulos (hasta 24 por apertura del inicio) con su carátula, su banner (que sirve de fondo en las tarjetas de la tele) y su resumen. Se aplican primero; en cuanto TMDB tiene datos del título, esos mandan. Se valida por año (±1) o, en temporadas marcadas ("S3", "Temporada 2"), por el parecido del nombre. Así la primera apertura ya muestra imágenes aunque TMDB tarde o no tenga el título.
+- **AniList de respaldo para carátulas y fondos.** Una sola petición trae hasta 8 títulos (hasta 24 por apertura del inicio) con su carátula, su banner (que sirve de fondo en las tarjetas de la tele) y su resumen. Desde la 3.8.0 son la fuente principal (TMDB rellena lo que falte). Se valida por año (±1) o, en temporadas marcadas ("S3", "Temporada 2"), por el parecido del nombre. Así la primera apertura ya muestra imágenes aunque TMDB tarde o no tenga el título.
 - **Títulos de En emisión corregidos.** Las tarjetas de "Últimos capítulos" traen un botón "Ver ahora"; el plugin lo tomaba como título. Ahora elige, entre los `alt`, `title` y encabezados cercanos al enlace, el que más se parece al slug del capítulo; si ninguno se parece, arma el título desde el slug.
 - **Títulos con apóstrofe** ("JoJo's", "Journey's End") ya no se cortan.
 

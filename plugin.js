@@ -341,19 +341,28 @@ async function tmdbInfoFor(item) {
   return info;
 }
 
+// TMDB es la fuente secundaria: solo rellena la caratula o el fondo que AniList no entrego.
 function applyInfo(item, info) {
   if (!info) return false;
-  if (info.p) item.poster = info.p;
-  if (info.b) item.backdrop = info.b;
+  let changed = false;
+  if (info.p && !item._alp) {
+    item.poster = info.p;
+    item._tmp = true;
+    changed = true;
+  }
+  if (info.b && !item._alb) {
+    item.backdrop = info.b;
+    item._tmb = true;
+    changed = true;
+  }
   if (info.o && !item.overview) item.overview = info.o;
   if (info.y && !item.year) item.year = info.y;
-  item._tm = true; // TMDB manda sobre AniList
-  return !!(info.p || info.b);
+  return changed;
 }
 
-// ---------- AniList: respaldo de caratulas, fondos (banner) y resumenes ----------
-// Una sola peticion trae varios titulos. Sus carátulas valen cuando TMDB no tiene (o aun no entrego) el titulo;
-// en cuanto hay datos de TMDB, esos mandan.
+// ---------- AniList: fuente principal de caratulas, fondos (banner) y resumenes ----------
+// Una sola peticion trae varios titulos. Si AniList tiene el titulo, sus imagenes mandan; TMDB (secundario)
+// rellena lo que AniList no tenga.
 
 const ANILIST = "https://graphql.anilist.co";
 
@@ -363,7 +372,7 @@ function stripHtml(s) {
 
 function anilistInfo(m, y) {
   return {
-    p: (m.coverImage && (m.coverImage.extraLarge || m.coverImage.large)) || "",
+    p: (m.coverImage && (m.coverImage.large || m.coverImage.extraLarge)) || "",
     b: m.bannerImage || "",
     o: stripHtml(m.description).slice(0, 700),
     y: y ? String(y) : "",
@@ -387,7 +396,7 @@ function anilistPick(list, title, year) {
     const c = cands[i];
     let ok;
     if (sp.marked && sp.season > 1) ok = c.score >= 0.6;
-    else if (year && c.y) ok = Math.abs(year - c.y) <= 1;
+    else if (year && c.y) ok = Math.abs(year - c.y) <= 1 || c.score >= 0.8;
     else ok = c.score >= 0.6;
     if (ok) return anilistInfo(c.m, c.y);
   }
@@ -397,12 +406,21 @@ function anilistPick(list, title, year) {
 }
 
 function applyAl(item, info) {
-  if (!info || item._tm) return false;
-  if (info.p) item.poster = info.p;
-  if (info.b) item.backdrop = info.b;
+  if (!info) return false;
+  let changed = false;
+  if (info.p) {
+    item.poster = info.p;
+    item._alp = true;
+    changed = true;
+  }
+  if (info.b) {
+    item.backdrop = info.b;
+    item._alb = true;
+    changed = true;
+  }
   if (info.o && !item.overview) item.overview = info.o;
   if (info.y && !item.year) item.year = info.y;
-  return !!(info.p || info.b);
+  return changed;
 }
 
 // Busca varios titulos en una sola peticion; guarda cada resultado (14 dias; 1 dia si no hubo) y lo aplica.
@@ -433,39 +451,36 @@ async function anilistBatch(items) {
   return touched;
 }
 
-// Pone caratula, fondo y resumen a los titulos de la lista. Lo guardado se aplica siempre (instantaneo): primero
-// AniList y encima TMDB. Lo que falte se busca en AniList (todos los que falten, hasta 96, en bloques de 8 y 4
-// peticiones a la vez: una peticion trae 8 titulos) y en TMDB (hasta `cap` por llamada: TMDB limita a unas 20 cada
-// 10 s por plugin), en paralelo y con tiempo maximo. Los titulos van en el orden recibido: quien llama los
-// intercala por fila para que lo primero que se ve (el principio de cada fila) sea lo primero que se busca.
-// Devuelve true si cambio algo.
+// Pone caratula, fondo y resumen a los titulos de la lista, en dos fases dentro del tiempo `budgetMs`:
+//  - Lo guardado se aplica siempre (instantaneo): AniList (principal) y, solo para lo que falte, TMDB.
+//  - Fase 1, AniList: todos los titulos que falten (hasta 96; 8 por peticion y 4 peticiones a la vez).
+//  - Fase 2, TMDB (secundario, hasta `cap` busquedas por llamada: limita a unas 20 cada 10 s por plugin): primero
+//    los titulos que siguen SIN imagen, luego los que solo les falta el fondo.
+// Los titulos van en el orden recibido: quien llama los intercala por fila para que lo que se ve primero se busque
+// primero. Devuelve true si cambio algo.
 async function enrichItems(items, cap, budgetMs) {
   let touched = false;
-  let fresh = 0;
-  const tmTodo = [];
+  const t0 = Date.now();
+  const left = function () { return budgetMs - (Date.now() - t0); };
   const alTodo = [];
   const queued = {};
   for (let i = 0; i < items.length; i++) {
     const it = items[i];
-    const tm = cacheGet("tm2:" + it.id);
     const al = cacheGet("al2:" + it.id);
+    const tm = cacheGet("tm2:" + it.id);
     if (al && al !== "0" && applyAl(it, JSON.parse(al))) touched = true;
-    if (tm) {
-      if (tm !== "0" && applyInfo(it, JSON.parse(tm))) touched = true;
-    } else if (fresh < cap && !queued["t" + it.id]) {
-      queued["t" + it.id] = true;
-      fresh++;
-      tmTodo.push(it);
-    }
-    if (!al && !(tm && tm !== "0") && alTodo.length < 96 && !queued["a" + it.id]) {
-      queued["a" + it.id] = true;
+    if (tm && tm !== "0" && applyInfo(it, JSON.parse(tm))) touched = true;
+    if (!al && alTodo.length < 96 && !queued[it.id]) {
+      queued[it.id] = true;
       alTodo.push(it);
     }
   }
-  if ((tmTodo.length || alTodo.length) && budgetMs > 600) {
+
+  // Fase 1: AniList
+  if (alTodo.length && left() > 600) {
     const chunks = [];
     for (let i = 0; i < alTodo.length; i += 8) chunks.push(alTodo.slice(i, i + 8));
-    const jobs = [
+    await within(
       mapLimit(chunks, 4, async function (chunk) {
         try {
           if (await anilistBatch(chunk)) touched = true;
@@ -473,15 +488,35 @@ async function enrichItems(items, cap, budgetMs) {
           kino.log("anilist: " + ((e && e.message) || e));
         }
       }),
-      mapLimit(tmTodo, 4, async function (it) {
-        try {
-          if (applyInfo(it, await tmdbInfoFor(it))) touched = true;
-        } catch (e) {
-          kino.log("tmdb: " + ((e && e.message) || e));
-        }
-      }),
-    ];
-    await within(Promise.all(jobs), budgetMs);
+      Math.min(left(), 5000)
+    );
+  }
+
+  // Fase 2: TMDB, solo para lo que AniList no resolvio
+  if (cap > 0 && left() > 600 && typeof kino.tmdb === "function") {
+    const noImg = [];
+    const noBack = [];
+    const seen = {};
+    for (let i = 0; i < items.length; i++) {
+      const it = items[i];
+      if (seen[it.id] || cacheGet("tm2:" + it.id)) continue; // ya consultado (con o sin resultado)
+      seen[it.id] = true;
+      if (!it._alp && !it._tmp) noImg.push(it);
+      else if (!it._alb && !it._tmb) noBack.push(it);
+    }
+    const todo = noImg.concat(noBack).slice(0, cap);
+    if (todo.length) {
+      await within(
+        mapLimit(todo, 4, async function (it) {
+          try {
+            if (applyInfo(it, await tmdbInfoFor(it))) touched = true;
+          } catch (e) {
+            kino.log("tmdb: " + ((e && e.message) || e));
+          }
+        }),
+        left()
+      );
+    }
   }
   return touched;
 }
@@ -660,7 +695,10 @@ function publicItems(items) {
   return items.map(function (it) {
     const c = Object.assign({}, it);
     delete c.type;
-    delete c._tm;
+    delete c._alp;
+    delete c._alb;
+    delete c._tmp;
+    delete c._tmb;
     return c;
   });
 }
