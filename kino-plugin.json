@@ -1,92 +1,108 @@
 {
-  "id": "monoschinos-st",
+  "id": "monoschinos",
   "name": "MonosChinos",
-  "version": "1.0.0",
-  "apiVersion": 8,
+  "version": "3.5.0",
+  "apiVersion": 6,
   "entry": "plugin.js",
-  "icon": "icon.png",
-  "color": "#FF6B00",
-  "description": "Anime en español y subtitulado de monoschinos.st: últimos capítulos en emisión, catálogo de animes y películas con carátulas, fondos y nombres de episodios.",
-  "author": "comunidad",
-  "categories": ["anime", "series", "movies"],
+  "description": "Anime subtitulado de monoschinos.st. En emisión (últimos capítulos), animes y películas, con carátulas, fondos e imágenes de capítulos de TMDB.",
+  "author": "tu-usuario-de-github",
+  "hosts": [
+    "monoschinos.st",
+    "www.monoschinos.st",
+    "mixdrop.top",
+    "mixdrop.co",
+    "mixdrop.ag",
+    "mixdrop.sb",
+    "mxdrop.click",
+    "mxdrop.to",
+    "mxcontent.net",
+    "www.mp4upload.com",
+    "mp4upload.com",
+    "a3.mp4upload.com",
+    "www1.mp4upload.com",
+    "luluvdo.com",
+    "lulustream.com",
+    "tnmr.org",
+    "lulucdn.com",
+    "voe.sx",
+    "jilliandescribecompany.com",
+    "andreagrabinduce.com",
+    "savefiles.com",
+    "streamhls.to",
+    "streamhls.com",
+    "dsvplay.com",
+    "dood.watch",
+    "doodstream.com",
+    "dood.la",
+    "dood.ws",
+    "dood.pm",
+    "bysekoze.com",
+    "filemoon.to",
+    "filemoon.sx",
+    "filemoon.eu",
+    "hexload.com",
+    "uqload.com",
+    "uqload.co",
+    "streamwish.to",
+    "streamwish.com",
+    "ahvsh.com",
+    "vidhide.com",
+    "vidhidepro.com",
+    "hqq.tv",
+    "waaw.tv"
+  ],
+  "streamHosts": "any",
   "capabilities": [
     "search",
     "home",
     "browse",
     "episodes",
     "resolve",
-    "scopedSearch",
     "download"
   ],
-  "browser": true,
-  "streamHosts": "any",
-  "hosts": [
-    "monoschinos.st",
-    "www.monoschinos.st",
-    "graphql.anilist.co",
-    "api.jikan.moe",
-    "ok.ru",
-    "www.ok.ru",
-    "mp4upload.com",
-    "www.mp4upload.com",
-    "streamwish.to",
-    "wishembed.pro",
-    "sfastwish.com",
-    "flaswish.com",
-    "obeywish.com",
-    "cdnwish.com",
-    "filemoon.sx",
-    "filemoon.to",
-    "voe.sx",
-    "uqload.to",
-    "uqload.net",
-    "uqload.co",
-    "yourupload.com",
-    "www.yourupload.com",
-    "streamtape.com",
-    "streamtape.to",
-    "dood.li",
-    "dood.wf",
-    "d000d.com",
-    "mixdrop.ag",
-    "mixdrop.co",
-    "fireload.com"
+  "categories": [
+    "anime"
   ],
-  "section": {
-    "label": "MonosChinos"
-  },
-  "theme": {
-    "accent": "#FF6B00",
-    "onAccent": "#FFFFFF",
-    "background": "#0F1016",
-    "surface": "#181A24",
-    "highlight": "#FF8C3B"
-  },
+  "discoverable": true,
+  "debug": false,
+  "color": "#FF9B05",
   "settings": [
     {
-      "key": "preferredServer",
+      "key": "server",
       "label": "Servidor preferido",
       "type": "select",
-      "hint": "Elige qué servidor abrir primero al reproducir un capítulo",
-      "default": "auto",
+      "default": "mixdrop",
+      "hint": "Se intenta primero; el resto queda en el menu Servidor.",
       "options": [
-        { "value": "auto", "label": "Automático (Recomendado)" },
-        { "value": "streamwish", "label": "StreamWish" },
-        { "value": "filemoon", "label": "Filemoon" },
-        { "value": "voe", "label": "VOE" },
-        { "value": "mp4upload", "label": "Mp4Upload" },
-        { "value": "okru", "label": "OK.ru" },
-        { "value": "uqload", "label": "Uqload" },
-        { "value": "yourupload", "label": "YourUpload" },
-        { "value": "streamtape", "label": "Streamtape" }
+        {
+          "value": "mixdrop",
+          "label": "MixDrop"
+        },
+        {
+          "value": "mp4upload",
+          "label": "Mp4Upload"
+        },
+        {
+          "value": "lulu",
+          "label": "LuluStream"
+        },
+        {
+          "value": "voe",
+          "label": "Voe"
+        },
+        {
+          "value": "savefiles",
+          "label": "SaveFiles"
+        },
+        {
+          "value": "dood",
+          "label": "Doodstream"
+        },
+        {
+          "value": "filemoon",
+          "label": "Filemoon"
+        }
       ]
-    },
-    {
-      "key": "enrichMeta",
-      "label": "Enriquecer portadas y episodios",
-      "type": "toggle",
-      "hint": "Busca fondos, sinopsis y nombres de capítulos en TMDB, AniList y MAL",
-      "default": true
     }
   ]
 }
